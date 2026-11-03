@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.4 — 2026-11-03
+
+- Remember CoverFlow, Grid and List independently for each library.
+- Close CoverFlow when entering a native-view library; reopen it on returning to
+  a remembered library, including a previously visited URL and browser reloads.
+- Preserve Jellyfin's native per-library Grid/List settings without modifying
+  its storage keys, private React state, sorting or filter preferences.
+- Keep existing boolean CoverFlow preferences compatible with the new format
+  and with rollback to the previous version.
+- Cancel delayed auto-opens after navigation and clear cached contents when
+  switching users; respect an explicit Escape until the next library visit.
+- Add mixed-library navigation, reload and preference regression tests.
+
 ## 0.4.3 — 2026-11-02
 
 - Fix the View menu integration for Jellyfin Web's current MUI MenuItem component.

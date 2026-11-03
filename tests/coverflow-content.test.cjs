@@ -43,7 +43,7 @@ class Node {
     getBoundingClientRect() { return { top: 100, bottom: 500, height: 400 }; }
 }
 
-function runtime() {
+function runtime(storage = new Map()) {
     const timers = [];
     const window = {
         innerWidth: 390, innerHeight: 844,
@@ -51,6 +51,7 @@ function runtime() {
         setTimeout(fn) { timers.push(fn); return timers.length; }, clearTimeout() {},
         requestAnimationFrame(fn) { timers.push(fn); return timers.length; },
         removeEventListener() {},
+        localStorage: { getItem: key => storage.get(key) || null, setItem: (key, value) => storage.set(key, value) },
     };
     const document = { createElement: tag => new Node(tag), getElementById: () => null,
         body: { style: {} }, removeEventListener() {} };
@@ -59,7 +60,8 @@ function runtime() {
             window.testApi = { state, renderBooks, flipCurrent, closeDetails, move, onWheel, onPointerDown,
                 onKeyDown, browseFolder, showSeries, loadLibraryPage, rebuildEntries, rememberDetails,
                 detailKind, formatDuration, getItemSubtitle, getPrimaryImageUrl, loadBooks, reloadSortedLibrary,
-                readNativeSortRequest, getCurrentSortSettings };
+                readNativeSortRequest, getCurrentSortSettings, getLibraryView, setLibraryView,
+                syncLibraryView, maybeAutoOpenRememberedLibrary };
         `);
     vm.runInNewContext(source, { window, document, console, Date, URL, URLSearchParams, DOMParser: class {
         parseFromString() { return { body: { textContent: 'Safe plot text' }, querySelectorAll: () => [] }; }
@@ -79,6 +81,76 @@ function addEntry(r, entry) {
     r.renderBooks();
     return r.state.cards[0];
 }
+
+test('CoverFlow, list and grid preferences are saved independently and survive reload', () => {
+    const storage = new Map(); const r = runtime(storage);
+    r.setLibraryView('tv', 'coverflow'); r.setLibraryView('comics', 'coverflow');
+    r.setLibraryView('photos', 'list'); r.setLibraryView('movies', 'grid');
+    const fresh = runtime(storage);
+    assert.equal(fresh.getLibraryView('tv'), 'coverflow');
+    assert.equal(fresh.getLibraryView('comics'), 'coverflow');
+    assert.equal(fresh.getLibraryView('photos'), 'list');
+    assert.equal(fresh.getLibraryView('movies'), 'grid');
+    assert.equal(fresh.getLibraryView('untouched'), null);
+    const legacy = JSON.parse(storage.get('effecta-coverflow-libraries:server:user'));
+    assert.deepEqual(legacy, { tv: true, comics: true });
+});
+
+test('existing boolean CoverFlow choices migrate without interpreting native views as enabled', () => {
+    const storage = new Map([['effecta-coverflow-libraries:server:user', JSON.stringify({ tv: true, photos: false })]]);
+    const r = runtime(storage);
+    assert.equal(r.getLibraryView('tv'), 'coverflow'); assert.equal(r.getLibraryView('photos'), null);
+    r.setLibraryView('tv', 'list');
+    assert.equal(runtime(storage).getLibraryView('tv'), 'list');
+    assert.equal(JSON.parse(storage.get('effecta-coverflow-libraries:server:user')).tv, undefined);
+});
+
+test('preferences are scoped to the account and malformed browser storage is harmless', () => {
+    const storage = new Map([['effecta-coverflow-libraries:server:user:views', '[]']]);
+    const r = runtime(storage); r.setLibraryView('tv', 'coverflow');
+    r.state.api.getCurrentUserId = () => 'another-user';
+    assert.equal(r.getLibraryView('tv'), null);
+    r.setLibraryView('tv', 'grid');
+    r.state.api.getCurrentUserId = () => 'user';
+    assert.equal(r.getLibraryView('tv'), 'coverflow');
+});
+
+test('switching from CoverFlow to a native-view library closes it without changing either preference', () => {
+    const r = runtime(); r.setLibraryView('library', 'coverflow'); r.setLibraryView('photos', 'list');
+    r.syncLibraryView(); r.state.overlay.hidden = false;
+    r.window.location.hash = '#/library?topParentId=photos'; r.window.location.href += '#photos';
+    r.syncLibraryView();
+    assert.equal(r.state.overlay.hidden, true);
+    assert.equal(r.getLibraryView('photos'), 'list'); assert.equal(r.getLibraryView('library'), 'coverflow');
+    r.state.lastAutoOpenRoute = 'old-route';
+    r.window.location.hash = '#/library?topParentId=library'; r.window.location.href += '#library';
+    r.syncLibraryView(); assert.equal(r.state.lastAutoOpenRoute, null);
+});
+
+test('a delayed auto-open is cancelled when navigating away from the remembered library', () => {
+    const r = runtime(); r.state.overlay.hidden = true; r.setLibraryView('library', 'coverflow');
+    r.maybeAutoOpenRememberedLibrary();
+    r.window.location.hash = '#/library?topParentId=photos'; r.window.location.href += '#photos';
+    r.flush(); assert.equal(r.state.overlay.hidden, true);
+});
+
+test('switching accounts closes the previous view and invalidates its cached catalog', () => {
+    const r = runtime(); r.syncLibraryView(); r.state.overlay.hidden = false;
+    r.state.books = [{ Id: 'private-album' }]; r.state.entries = r.state.books;
+    const generation = r.state.loadGeneration;
+    r.state.api.getCurrentUserId = () => 'new-user';
+    r.syncLibraryView();
+    assert.equal(r.state.overlay.hidden, true); assert.equal(r.state.books.length, 0);
+    assert.equal(r.state.activeLibraryId, null); assert.ok(r.state.loadGeneration > generation);
+});
+
+test('Escape closes this visit without erasing the saved CoverFlow preference', () => {
+    const r = runtime(); r.setLibraryView('library', 'coverflow'); r.syncLibraryView();
+    r.state.overlay.hidden = false;
+    r.onKeyDown({ key: 'Escape', target: new Node(), preventDefault() {} });
+    assert.equal(r.state.overlay.hidden, true); assert.equal(r.getLibraryView('library'), 'coverflow');
+    r.maybeAutoOpenRememberedLibrary(); r.flush(); assert.equal(r.state.overlay.hidden, true);
+});
 
 test('sorting keeps the exact album and its existing card while scanning later pages', async () => {
     const r = runtime();

@@ -64,6 +64,9 @@
         activeLibraryId: null,
         activeCollectionType: null,
         lastAutoOpenRoute: null,
+        lastViewRoute: null,
+        lastViewScope: null,
+        viewPreferences: Object.create(null),
         libraryIds: [],
         libraryViews: Object.create(null),
         loadGeneration: 0,
@@ -129,23 +132,74 @@
 
     function getRememberedLibraries() {
         try {
-            return JSON.parse(window.localStorage.getItem(getPreferenceKey()) || '{}');
+            var value = JSON.parse(window.localStorage.getItem(getPreferenceKey()) || '{}');
+            return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
         } catch (error) {
             return {};
         }
     }
 
     function setLibraryRemembered(libraryId, remembered) {
+        setLibraryView(libraryId, remembered ? 'coverflow' : null);
+    }
+
+    function getLibraryView(libraryId) {
+        var key = getPreferenceKey() + ':views';
+        if (!state.viewPreferences[key]) {
+            try {
+                var value = JSON.parse(window.localStorage.getItem(key) || '{}');
+                state.viewPreferences[key] = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+            } catch (error) { state.viewPreferences[key] = {}; }
+        }
+        var view = state.viewPreferences[key][libraryId];
+        if (view === 'coverflow' || view === 'grid' || view === 'list') { return view; }
+        // Preserve the old boolean preference without treating a native view as truthy.
+        return getRememberedLibraries()[libraryId] === true ? 'coverflow' : null;
+    }
+
+    function setLibraryView(libraryId, view) {
         if (!libraryId) {
             return;
         }
+        getLibraryView(libraryId);
+        var key = getPreferenceKey() + ':views';
+        var preferences = state.viewPreferences[key];
+        if (view) { preferences[libraryId] = view; } else { delete preferences[libraryId]; }
         var libraries = getRememberedLibraries();
-        if (remembered) {
+        if (view === 'coverflow') {
             libraries[libraryId] = true;
         } else {
             delete libraries[libraryId];
         }
-        window.localStorage.setItem(getPreferenceKey(), JSON.stringify(libraries));
+        try {
+            window.localStorage.setItem(key, JSON.stringify(preferences));
+            // Keep rollback to an older plugin safe: only CoverFlow is a true value.
+            window.localStorage.setItem(getPreferenceKey(), JSON.stringify(libraries));
+        } catch (error) {
+            console.warn('CoverFlow: view preference is session-only because browser storage is unavailable.');
+        }
+    }
+
+    function syncLibraryView() {
+        if (!state.api) { return; }
+        var route = window.location.href;
+        var scope = getPreferenceKey();
+        if (state.lastViewRoute === route && state.lastViewScope === scope) { return; }
+        var accountChanged = state.lastViewScope !== null && state.lastViewScope !== scope;
+        state.lastViewRoute = route;
+        state.lastViewScope = scope;
+        state.lastAutoOpenRoute = null;
+        var libraryId = getCurrentLibraryId();
+        if (accountChanged || !libraryId || getLibraryView(libraryId) !== 'coverflow') {
+            closeCoverFlow(false);
+        }
+        if (accountChanged) {
+            state.loadGeneration += 1;
+            state.activeLibraryId = null;
+            state.books = [];
+            state.entries = [];
+            state.detailCache.clear();
+        }
     }
 
     /****************************************************************
@@ -288,6 +342,15 @@
         syncLauncher();
         if (!state.launcherTimer) {
             state.launcherTimer = window.setInterval(syncLauncher, 1000);
+            window.addEventListener('hashchange', syncLauncher);
+            window.addEventListener('popstate', syncLauncher);
+            window.addEventListener('storage', function reloadViewPreferences(event) {
+                if (event.key === getPreferenceKey() + ':views' || event.key === getPreferenceKey() || event.key === null) {
+                    delete state.viewPreferences[getPreferenceKey() + ':views'];
+                    state.lastViewRoute = null;
+                    syncLauncher();
+                }
+            });
         }
     }
 
@@ -333,7 +396,8 @@
         // The Grid row includes a separate settings button, not a view choice.
         var nestedButton = target.closest('button');
         if (row && (!nestedButton || nestedButton === row)) {
-            setLibraryRemembered(getCurrentLibraryId(), false);
+            setLibraryView(getCurrentLibraryId(), row.dataset.ecfNativeViewMode || null);
+            state.lastAutoOpenRoute = window.location.href;
             closeCoverFlow(false);
             syncLayoutMenuSelection();
         }
@@ -383,6 +447,7 @@
         if (state.menuRoot && !state.menuRoot.isConnected) {
             releaseLayoutMenu();
         }
+        syncLibraryView();
         syncOpenLibrary();
         var currentButton = document.getElementById('effecta-coverflow-toolbar-button');
         if (currentButton && currentButton.getClientRects().length > 0) {
@@ -630,11 +695,15 @@
     function maybeAutoOpenRememberedLibrary() {
         var libraryId = getCurrentLibraryId();
         var route = window.location.href;
-        if (state.api && libraryId && getRememberedLibraries()[libraryId]
+        var scope = getPreferenceKey();
+        if (state.api && libraryId && getLibraryView(libraryId) === 'coverflow'
             && state.lastAutoOpenRoute !== route
             && (!state.overlay || state.overlay.hidden)) {
             state.lastAutoOpenRoute = route;
-            window.setTimeout(openCoverFlow, 0);
+            window.setTimeout(function openRememberedLibrary() {
+                if (window.location.href === route && getPreferenceKey() === scope
+                    && getLibraryView(libraryId) === 'coverflow') { openCoverFlow(); }
+            }, 0);
         }
     }
 
@@ -665,10 +734,12 @@
             return false;
         }
 
-        menuItems.forEach(function markNativeView(row) {
+        menuItems.forEach(function markNativeView(row, index) {
             var label = row.querySelector('.MuiListItemText-primary,.actionSheetItemText,.listItemBodyText');
             if (modernMenu || label && /^(Vista Griglia|Vista a Elenco|Grid View|List View)$/i.test(String(label.textContent).trim())) {
                 row.dataset.ecfNativeView = 'true';
+                row.dataset.ecfNativeViewMode = modernMenu ? (index === 0 ? 'grid' : 'list')
+                    : /^(Vista a Elenco|List View)$/i.test(String(label.textContent).trim()) ? 'list' : 'grid';
             }
         });
         if (modernMenu && state.menuRoot !== modernMenu) { watchLayoutMenu(modernMenu); }
@@ -685,6 +756,7 @@
         item.removeAttribute('data-value');
         item.removeAttribute('value');
         item.removeAttribute('data-ecf-native-view');
+        item.removeAttribute('data-ecf-native-view-mode');
         item.setAttribute('role', 'menuitemradio');
         item.setAttribute('tabindex', '0');
         item.setAttribute('aria-label', 'Vista CoverFlow');
@@ -2248,6 +2320,7 @@
             if (state.mode === 'volumes' || state.folderStack.length) {
                 showSeries();
             } else {
+                state.lastAutoOpenRoute = window.location.href;
                 closeCoverFlow();
             }
         }

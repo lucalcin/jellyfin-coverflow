@@ -95,6 +95,7 @@ test('CoverFlow appears in the current view popover and behaves as a remembered 
         assert.equal(await page.evaluate(() => window.nativeChoice), 'list');
         assert.equal(await page.evaluate(() => window.__effectaBookCoverFlow.overlay.hidden), true);
         assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('effecta-coverflow-libraries:server:user')).library), undefined);
+        assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('effecta-coverflow-libraries:server:user:views')).library), 'list');
         // A React-style row replacement must restore exactly one extension row.
         await page.evaluate(() => {
             const list = document.querySelector('#selectview-popover .MuiList-root');
@@ -112,12 +113,90 @@ test('CoverFlow appears in the current view popover and behaves as a remembered 
         await page.keyboard.press('Enter');
         assert.equal(await page.evaluate(() => window.nativeChoice), 'grid');
         assert.equal(await page.evaluate(() => window.__effectaBookCoverFlow.overlay.hidden), true);
+        assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('effecta-coverflow-libraries:server:user:views')).library), 'grid');
         await page.locator('#selectview-popover .MuiBackdrop-root').click({ position: { x: 900, y: 500 } });
         await page.waitForFunction(() => document.body.style.overflow === '');
         assert.deepEqual(errors, []);
     } finally {
         await context.close(); await browser.close();
     }
+});
+
+test('mixed libraries retain their own views after navigation, revisits and a browser reload', async () => {
+    const browser = await chromium.launch({ headless: true, executablePath });
+    const context = await browser.newContext(); const page = await context.newPage(); const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    const persistentRouteMarkup = markup.replace("location.hash='#/library?topParentId=library';",
+        "if(!location.hash)location.hash='#/library?topParentId=library';");
+    await context.route('http://coverflow.test/**', route => route.fulfill({ contentType: 'text/html', body: persistentRouteMarkup }));
+    async function boot() {
+        await page.evaluate(() => {
+            window.ApiClient.getUserViews = async () => ({ Items: [
+                { Id: 'tv', CollectionType: 'tvshows' }, { Id: 'comics', CollectionType: 'books' },
+                { Id: 'photos', CollectionType: 'homevideos' }, { Id: 'movies', CollectionType: 'movies' },
+            ] });
+            // Jellyfin 12.4 persists native Grid/List by view type + topParentId.
+            // Model that existing behavior; the extension must not overwrite it.
+            const libraryId = () => new URLSearchParams(location.hash.split('?')[1]).get('topParentId');
+            const restoreNative = () => { window.nativeChoice = localStorage.getItem('native-view:' + libraryId()) || 'grid'; };
+            restoreNative(); window.addEventListener('hashchange', restoreNative);
+            const create = window.createNativeMenu;
+            window.createNativeMenu = () => {
+                const root = create();
+                root.querySelectorAll('[data-native]').forEach(row => {
+                    const activate = row.onclick;
+                    row.onclick = () => { activate(); localStorage.setItem('native-view:' + libraryId(), window.nativeChoice); };
+                });
+                return root;
+            };
+        });
+        await page.addScriptTag({ content: source });
+        await page.waitForFunction(() => Boolean(window.__effectaBookCoverFlow.api));
+    }
+    async function navigate(library) {
+        await page.evaluate(id => { location.hash = '#/library?topParentId=' + id; }, library);
+        await page.waitForFunction(id => window.__effectaBookCoverFlow.lastViewRoute === location.href
+            && new URLSearchParams(location.hash.split('?')[1]).get('topParentId') === id, library);
+    }
+    async function choose(view) {
+        await page.locator('#view').click();
+        await page.locator('#effecta-coverflow-menu-item').waitFor();
+        if (view === 'coverflow') { await page.locator('#effecta-coverflow-menu-item').click(); }
+        else {
+            await page.locator('[data-ecf-native-view][data-native="' + view + '"]').click();
+            await page.locator('#selectview-popover .MuiBackdrop-root').click({ position: { x: 900, y: 500 } });
+        }
+        await page.waitForFunction(mode => Boolean(window.__effectaBookCoverFlow.overlay && !window.__effectaBookCoverFlow.overlay.hidden)
+            === (mode === 'coverflow'), view);
+    }
+    try {
+        await page.goto('http://coverflow.test/'); await boot();
+        await navigate('tv'); await choose('coverflow');
+        await navigate('comics');
+        assert.equal(await page.evaluate(() => window.__effectaBookCoverFlow.overlay.hidden), true);
+        await choose('coverflow');
+        await navigate('photos'); await choose('list');
+        assert.equal(await page.evaluate(() => window.nativeChoice), 'list');
+        await navigate('movies'); await choose('grid');
+        await navigate('tv');
+        await page.waitForFunction(() => window.__effectaBookCoverFlow.overlay.hidden === false
+            && window.__effectaBookCoverFlow.activeLibraryId === 'tv');
+        await navigate('photos');
+        assert.equal(await page.evaluate(() => window.__effectaBookCoverFlow.overlay.hidden), true);
+        assert.equal(await page.evaluate(() => window.nativeChoice), 'list');
+        await page.reload(); await boot();
+        assert.equal(await page.evaluate(() => Boolean(window.__effectaBookCoverFlow.overlay && !window.__effectaBookCoverFlow.overlay.hidden)), false);
+        assert.equal(await page.evaluate(() => window.nativeChoice), 'list');
+        await navigate('comics');
+        await page.waitForFunction(() => window.__effectaBookCoverFlow.overlay.hidden === false
+            && window.__effectaBookCoverFlow.activeLibraryId === 'comics');
+        await navigate('movies');
+        assert.equal(await page.evaluate(() => window.__effectaBookCoverFlow.overlay.hidden), true);
+        assert.equal(await page.evaluate(() => window.nativeChoice), 'grid');
+        assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('effecta-coverflow-libraries:server:user:views'))),
+            { tv: 'coverflow', comics: 'coverflow', photos: 'list', movies: 'grid' });
+        assert.deepEqual(errors, []);
+    } finally { await context.close(); await browser.close(); }
 });
 
 // Optional release check against an extracted copy of the installed public web

@@ -51,6 +51,10 @@ your collection or rewrite media files, metadata or the Jellyfin database.
 | Native TV / mobile clients | Not supported unless they actually load the compatible Web frontend |
 | Interface language | Currently Italian; localization is not implemented yet |
 
+Current user testing reports good results with movies, TV series, music and
+comics. Ebooks still need validation. Personal photos and videos are experimental
+and are not currently recommended as a demonstration of the plugin.
+
 JavaScript Injector is a separate community dependency. CoverFlow registers its
 script through that plugin; you do **not** need to paste JavaScript, fork
 Jellyfin Web or manually edit its installed files.
@@ -92,13 +96,13 @@ on access to the maintainer's home media server.
 
 ### Manual alternative
 
-Download `CoverFlow_0.4.3_Jellyfin12.zip` from
-[Releases](https://github.com/lucalcin/jellyfin-coverflow/releases/tag/v0.4.3).
+Download `CoverFlow_0.4.4_Jellyfin12.zip` from
+[Releases](https://github.com/lucalcin/jellyfin-coverflow/releases/tag/v0.4.4).
 Stop Jellyfin and extract its three files into a dedicated plugin-version
-directory such as `CoverFlow_0.4.3.0` under **your installation's plugin directory**:
+directory such as `CoverFlow_0.4.4.0` under **your installation's plugin directory**:
 
 ```text
-CoverFlow_0.4.3.0/
+CoverFlow_0.4.4.0/
   Jellyfin.Plugin.CoverFlow.dll
   meta.json
   coverflow.png
@@ -120,6 +124,14 @@ with the operating system and container configuration.
 4. Use the native Jellyfin sort menu to reorder both views. The selected item
    remains selected even when its new position requires loading another page.
 5. Select Grid or List, or toggle the CoverFlow icon, to leave this view.
+
+Choose the view once in each library. For example, TV series and comics can use
+CoverFlow while photos use List and movies use Grid. CoverFlow respects those
+independent choices when moving between libraries and returning to the same URL.
+Jellyfin continues to own native Grid/List persistence; the extension does not
+rewrite its private settings. Existing CoverFlow preferences are preserved.
+Preferences are local to the browser, not synchronized between devices. Clearing
+browser site data resets them; unavailable storage limits saving to the session.
 
 The keyboard button opens a real title-search field. Enter hides the mobile
 keyboard; a second click closes the field. Escape closes the card back first,

@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/lucalcin/jellyfin-coverflow/main/artwork/coverflow.png",
     "versions": [
       {
+        "version": "0.4.4.0",
+        "changelog": "Remembers CoverFlow, Grid and List independently for each library. Restores the correct view on navigation, revisits and reloads while preserving Jellyfin native Grid/List settings and existing CoverFlow choices.",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/lucalcin/jellyfin-coverflow/releases/download/v0.4.4/CoverFlow_0.4.4_Jellyfin12.zip",
+        "checksum": "30C6641AAFE858B9203A3FAD11E3B61F",
+        "timestamp": "2026-11-03T16:40:00Z"
+      },
+      {
         "version": "0.4.3.0",
         "changelog": "Fixes the native MUI View menu integration and follows Jellyfin sorting while preserving the selected item across pages, direction changes and comic-folder navigation.",
         "targetAbi": "12.0.0.0",
