@@ -35,7 +35,7 @@ official Jellyfin plugin and does not add this interface to native TV clients.
 - **Progressive loading.** Show an initial catalog page, then load more in the
   background. Existing visible cover nodes are reused rather than recreated.
 - **Optional group posters.** Add `coverflow-series.png` or `coverflow-series.jpg`
-  beside a comic/book folder; otherwise CoverFlow can use a descendant volume's
+  inside a comic/book folder; otherwise CoverFlow can use a descendant volume's
   cover. PNG takes precedence when both are present.
 
 CoverFlow reads the existing catalog, metadata and images. It does not duplicate
