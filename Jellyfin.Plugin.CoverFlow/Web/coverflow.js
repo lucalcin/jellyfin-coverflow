@@ -19,6 +19,17 @@
         title: null,
         subtitle: null,
         heading: null,
+        alphabet: null,
+        alphabetButtons: Object.create(null),
+        alphabetActive: null,
+        pendingInitial: null,
+        selectionAnchors: Object.create(null),
+        nativeQueries: Object.create(null),
+        nativeQueryTimes: Object.create(null),
+        nativeSelectionJob: null,
+        nativeSortAnchor: null,
+        selectionTrackingInstalled: false,
+        selectionNote: null,
         status: null,
         backButton: null,
         searchPanel: null,
@@ -131,6 +142,280 @@
         return 'effecta-coverflow-libraries:' + serverId + ':' + userId;
     }
 
+    function normalizeItemId(id) {
+        return String(id || '').replace(/-/g, '').toLowerCase();
+    }
+
+    function getNativeParentId() {
+        var hash = window.location.hash.split('?')[1] || '';
+        return new URLSearchParams(window.location.search + '&' + hash).get('parentId') || getCurrentLibraryId();
+    }
+
+    function getSelectionScope(parentId) {
+        return getPreferenceKey() + ':' + getCurrentLibraryId() + ':' + normalizeItemId(parentId || getNativeParentId());
+    }
+
+    function rememberFlowSelection() {
+        var entry = state.entries[state.index];
+        if (!state.api || !state.activeLibraryId || state.overlay && state.overlay.hidden
+            || !entry || !entry.Id || state.activeLibraryId !== getCurrentLibraryId()) { return null; }
+        var parentId = state.folderId || state.activeLibraryId;
+        var anchor = { id: entry.Id, entry: entry, parentId: parentId, scope: getSelectionScope(parentId) };
+        state.selectionAnchors[anchor.scope] = anchor;
+        return anchor;
+    }
+
+    function getNativeCards(visibleOnly) {
+        if (typeof document.querySelectorAll !== 'function') { return []; }
+        var seen = new Set();
+        var headerBottom = state.button ? state.button.getBoundingClientRect().bottom : 0;
+        return Array.from(document.querySelectorAll('[data-id][data-type],.card[data-id],.listItem[data-id]'))
+            .map(function nativeCard(node) {
+                return { id: node.getAttribute('data-id'), node: node.closest('.card,.listItem,[role="listitem"],.MuiCard-root,.MuiListItem-root') };
+            }).filter(function currentCard(card) {
+                if (!card.id || !card.node || card.node.closest('#' + OVERLAY_ID) || seen.has(normalizeItemId(card.id))) { return false; }
+                var bounds = card.node.getBoundingClientRect();
+                if (bounds.width <= 0 || bounds.height <= 0 || visibleOnly
+                    && (bounds.bottom <= headerBottom + 10 || bounds.top >= window.innerHeight - 10)) { return false; }
+                seen.add(normalizeItemId(card.id));
+                return true;
+            });
+    }
+
+    function captureNativeSelection() {
+        var scope = getSelectionScope();
+        if (state.overlay && !state.overlay.hidden || state.nativeSelectionJob) { return state.selectionAnchors[scope] || null; }
+        var cards = getNativeCards(true);
+        var previous = state.selectionAnchors[scope];
+        if (previous && previous.keepUntilIntent) { return previous; }
+        var current = cards.find(function focused(card) { return card.node.contains(document.activeElement); })
+            || cards.find(function retained(card) { return previous && normalizeItemId(card.id) === normalizeItemId(previous.id); }) || cards[0];
+        if (!current) { return previous || null; }
+        var anchor = { id: current.id, parentId: getNativeParentId(), scope: scope };
+        state.selectionAnchors[scope] = anchor;
+        return anchor;
+    }
+
+    function installSelectionTracking() {
+        if (state.selectionTrackingInstalled) { return; }
+        state.selectionTrackingInstalled = true;
+        ['pointerdown', 'focusin'].forEach(function trackNativeIntent(type) {
+            document.addEventListener(type, function rememberNativeItem(event) {
+                if (state.overlay && !state.overlay.hidden || !event.target.closest) { return; }
+                var item = event.target.closest('[data-id][data-type],.card[data-id],.listItem[data-id]');
+                if (!item || !item.closest('.card,.listItem,[role="listitem"],.MuiCard-root,.MuiListItem-root')) { return; }
+                var scope = getSelectionScope();
+                Array.from(document.querySelectorAll('[data-ecf-current]')).forEach(function clearOldSelection(node) {
+                    if (!node.contains(item)) { node.removeAttribute('data-ecf-current'); }
+                });
+                state.selectionAnchors[scope] = { id: item.getAttribute('data-id'), parentId: getNativeParentId(), scope: scope };
+                if (event.type === 'pointerdown') { cancelNativeSelection(); }
+            }, true);
+        });
+        var scrollQueued = false;
+        document.addEventListener('scroll', function trackNativeScroll(event) {
+            if (scrollQueued || !state.api || state.nativeSelectionJob || state.overlay && !state.overlay.hidden
+                || event.target.closest && event.target.closest('.MuiModal-root,.dialogContainer')) { return; }
+            scrollQueued = true;
+            window.requestAnimationFrame(function captureScrolledItem() {
+                scrollQueued = false;
+                var anchor = state.selectionAnchors[getSelectionScope()];
+                if (anchor) { anchor.keepUntilIntent = false; }
+                captureNativeSelection();
+            });
+        }, true);
+    }
+
+    function cancelNativeSelection() {
+        var job = state.nativeSelectionJob;
+        if (job) { window.clearTimeout(job.timer); window.clearTimeout(job.finishTimer); window.clearTimeout(job.expiryTimer); }
+        state.nativeSelectionJob = null;
+        if (state.selectionNote) { state.selectionNote.hidden = true; }
+    }
+
+    function selectionMessage(message) {
+        if (!state.selectionNote) {
+            state.selectionNote = element('div', 'ecf-native-note');
+            state.selectionNote.setAttribute('role', 'status');
+            document.body.appendChild(state.selectionNote);
+        }
+        state.selectionNote.textContent = message;
+        state.selectionNote.hidden = !message;
+    }
+
+    function getNativeSettingsKey(query) {
+        var known = state.sortStorageKeys[getSortContextKey()];
+        if (known && readNativeStoredSort(known)) { return known; }
+        var types = String(query && query.includeitemtypes || '').split(',');
+        var prefixes = { Movie: 'movies', Series: 'series', MusicAlbum: 'albums', Folder: 'folders', Book: 'books',
+            Audio: 'songs', Photo: 'photos', PhotoAlbum: 'photoalbums', Video: 'videos', BoxSet: 'collections' };
+        var preferred = types.map(function nativeType(type) { return prefixes[type]; }).filter(Boolean);
+        var keys = [];
+        try {
+            for (var i = 0; i < window.localStorage.length; i += 1) {
+                var key = window.localStorage.key(i);
+                if (readNativeStoredSort(key)) { keys.push(key); }
+            }
+        } catch (error) { return null; }
+        var found = keys.find(function matchingView(key) { return preferred.includes(key.split(' - ')[0].toLowerCase()); })
+            || (keys.length === 1 ? keys[0] : null);
+        if (found) { return found; }
+        var prefix = preferred.includes('folders') ? 'folders' : preferred.length === 1 ? preferred[0] : null;
+        return prefix ? prefix + ' - ' + getCurrentLibraryId() : null;
+    }
+
+    function readNativePageSettings(key) {
+        var saved = window.localStorage.getItem(key);
+        if (saved) { return JSON.parse(saved); }
+        // Jellyfin 12.4's default view settings are not persisted until the first
+        // change. Keep the complete defaults when pagination creates the record.
+        var prefix = key.split(' - ')[0];
+        var sort = getCurrentSortSettings();
+        return { ShowTitle: true, ShowYear: true, ViewMode: prefix === 'songs' ? 'list' : 'grid',
+            ImageType: prefix === 'studios' ? 'Thumb' : 'Primary', CardLayout: false,
+            SortBy: sort.by.split(','), SortOrder: sort.order, StartIndex: 0 };
+    }
+
+    function nativeSelectionSignature(settings) {
+        return JSON.stringify([settings.SortBy, settings.SortOrder, settings.Alphabet, settings.Filters]);
+    }
+
+    async function findNativeItemPage(anchor, query, settings, isCurrent) {
+        var options = Object.assign({}, query);
+        var sort = getCurrentSortSettings();
+        options.sortby = sort.by;
+        options.sortorder = sort.order;
+        var clearAlphabet = settings.Alphabet && anchor.entry && getEntryInitial(anchor.entry) !== String(settings.Alphabet).toUpperCase();
+        if (clearAlphabet || Object.prototype.hasOwnProperty.call(settings, 'Alphabet')) {
+            delete options.namestartswith;
+            delete options.namestartswithorgreater;
+            delete options.namelessthan;
+            if (!clearAlphabet && settings.Alphabet) {
+                if (settings.Alphabet === '#') { options.namelessthan = 'A'; }
+                else { options.namestartswith = settings.Alphabet; }
+            }
+        }
+        // Use the same marker as other plugin queries: probes must not become
+        // the native catalog's page size or trigger another sort reload.
+        options.fields = 'PrimaryImageAspectRatio,People,ChildCount,ParentId,SortName';
+        options.enabletotalrecordcount = true;
+        var pageSize = Number(query.limit) || 0;
+        var total = Infinity;
+        for (var start = 0; start < total;) {
+            var response = await state.api.getItems(state.api.getCurrentUserId(), Object.assign({}, options, { startindex: start, limit: PAGE_SIZE }));
+            if (!isCurrent()) { return null; }
+            var page = response.Items || [];
+            total = response.TotalRecordCount == null ? start + page.length : response.TotalRecordCount;
+            var offset = page.findIndex(function selected(item) { return normalizeItemId(item.Id) === normalizeItemId(anchor.id); });
+            if (offset >= 0) {
+                var index = start + offset;
+                var pageStart = pageSize ? Math.floor(index / pageSize) * pageSize : 0;
+                var first = page[pageStart - start];
+                if (!first) {
+                    var targetPage = await state.api.getItems(state.api.getCurrentUserId(), Object.assign({}, options, { startindex: pageStart, limit: pageSize || PAGE_SIZE }));
+                    if (!isCurrent()) { return null; }
+                    first = (targetPage.Items || [])[0];
+                }
+                return { startIndex: pageStart, firstId: first && first.Id, clearAlphabet: Boolean(clearAlphabet) };
+            }
+            if (!page.length) { break; }
+            start += page.length;
+        }
+        return null;
+    }
+
+    function restoreNativeSelection(anchor) {
+        if (!anchor || !anchor.id) { return; }
+        cancelNativeSelection();
+        if (anchor.scope !== getSelectionScope()) {
+            selectionMessage('La selezione resta memorizzata nella sua cartella: apri la stessa cartella in Jellyfin.');
+            window.setTimeout(function hideFolderNotice() { selectionMessage(''); }, 4500);
+            return;
+        }
+        var job = { anchor: anchor, deadline: Date.now() + 15000, located: false, busy: false };
+        anchor.keepUntilIntent = true;
+        state.nativeSelectionJob = job;
+        job.expiryTimer = window.setTimeout(function stopExpiredSelection() {
+            if (state.nativeSelectionJob === job) { cancelNativeSelection(); }
+        }, 15000);
+        function isCurrent() {
+            return state.nativeSelectionJob === job && anchor.scope === getSelectionScope()
+                && (!state.overlay || state.overlay.hidden) && Date.now() < job.deadline;
+        }
+        async function locate() {
+            if (!isCurrent()) { if (state.nativeSelectionJob === job) { cancelNativeSelection(); selectionMessage(''); } return; }
+            if (job.busy) { return; }
+            var query = state.nativeQueries[anchor.scope];
+            var key = getNativeSettingsKey(query);
+            try {
+                if (!job.located && query && key) {
+                    job.busy = true;
+                    var settings = readNativePageSettings(key);
+                    job.key = key;
+                    job.signature = nativeSelectionSignature(settings);
+                    var existing = getNativeCards(false);
+                    var onPage = existing.some(function selected(card) { return normalizeItemId(card.id) === normalizeItemId(anchor.id); });
+                    var sort = getCurrentSortSettings();
+                    var samePage = onPage && query.sortby === sort.by && query.sortorder === sort.order
+                        && Number(query.startindex || 0) === Number(settings.StartIndex || 0);
+                    var result = samePage ? { startIndex: Number(settings.StartIndex || 0), firstId: existing[0].id, clearAlphabet: false }
+                        : await findNativeItemPage(anchor, query, settings, isCurrent);
+                    job.busy = false;
+                    if (!isCurrent()) { return; }
+                    if (!result) {
+                        cancelNativeSelection();
+                        selectionMessage('L’elemento corrente non è presente nei filtri di questa vista.');
+                        window.setTimeout(function hideMissingSelection() { selectionMessage(''); }, 4500);
+                        return;
+                    }
+                    job.located = true;
+                    job.firstId = result.firstId;
+                    // Only pagination and a conflicting alphabet constraint may
+                    // change; preserve the current view, sort and all other filters.
+                    settings = readNativePageSettings(key);
+                    if (settings.StartIndex !== result.startIndex || result.clearAlphabet) {
+                        settings.StartIndex = result.startIndex;
+                        if (result.clearAlphabet) { settings.Alphabet = null; }
+                        job.signature = nativeSelectionSignature(settings);
+                        window.localStorage.setItem(key, JSON.stringify(settings));
+                        window.dispatchEvent(new StorageEvent('local-storage', { key: key }));
+                    }
+                }
+                var cards = getNativeCards(false);
+                var selected = cards.find(function sameItem(card) { return normalizeItemId(card.id) === normalizeItemId(anchor.id); });
+                var correctPage = !job.firstId || cards[0] && normalizeItemId(cards[0].id) === normalizeItemId(job.firstId);
+                if (selected && correctPage && !document.querySelector('.MuiModal-root,.dialogContainer')) {
+                    var bounds = selected.node.getBoundingClientRect();
+                    var headerBottom = state.button ? state.button.getBoundingClientRect().bottom : 0;
+                    if (job.node !== selected.node || bounds.top < headerBottom || bounds.bottom > window.innerHeight) {
+                        Array.from(document.querySelectorAll('[data-ecf-current]')).forEach(function unmark(node) { node.removeAttribute('data-ecf-current'); });
+                        selected.node.setAttribute('data-ecf-current', 'true');
+                        selected.node.scrollIntoView({ block: 'center', inline: 'nearest' });
+                        var focus = selected.node.querySelector('a,button,[tabindex]') || selected.node;
+                        if (focus === selected.node && !focus.hasAttribute('tabindex')) { focus.tabIndex = -1; }
+                        focus.focus({ preventScroll: true });
+                        job.node = selected.node;
+                        selectionMessage('');
+                    }
+                    if (!job.finishTimer) {
+                        job.finishTimer = window.setTimeout(function selectionSettled() {
+                            job.finishTimer = null;
+                            if (isCurrent() && job.node.isConnected) { cancelNativeSelection(); }
+                        }, 900);
+                    }
+                }
+            } catch (error) {
+                job.busy = false;
+                console.warn('CoverFlow: unable to restore the native selection.', error);
+                cancelNativeSelection(); selectionMessage('Selezione conservata; impossibile ripristinare la pagina nativa.');
+                return;
+            }
+            if (state.nativeSelectionJob === job) { job.timer = window.setTimeout(locate, 100); }
+        }
+        selectionMessage('Recupero dell’elemento corrente…');
+        job.timer = window.setTimeout(locate, 80);
+    }
+
     function getRememberedLibraries() {
         try {
             var value = JSON.parse(window.localStorage.getItem(getPreferenceKey()) || '{}');
@@ -227,12 +512,20 @@
             '.ecf-heading{position:absolute;left:1rem;right:1rem;min-width:0;text-align:center;z-index:3;pointer-events:none;text-shadow:0 2px 7px #000,0 0 16px #000}',
             '.ecf-heading h2{display:inline-block;max-width:min(92vw,70rem);font-size:clamp(1.1rem,2.4vw,1.6rem);margin:0;padding:.18rem .7rem;border-radius:.6rem;background:#050708a8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:top}',
             '.ecf-heading p{width:max-content;max-width:min(90vw,55rem);margin:.22rem auto 0;padding:.08rem .5rem;border-radius:.5rem;background:#0507088f;color:#d3dbe0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+            '.ecf-alphabet{position:absolute;right:max(.3rem,env(safe-area-inset-right));top:.6rem;bottom:7.5rem;z-index:8;display:flex;flex-direction:column;width:1.8rem;overflow-y:auto;overscroll-behavior:contain;touch-action:pan-y;scrollbar-width:none;border-radius:.45rem;background:#17232ce8;padding:.2rem 0}',
+            '.ecf-alphabet button{flex:1 0 1.05rem;max-height:2rem;min-height:1.05rem;border:0;padding:.05rem 0;background:transparent;color:#d9e6ed;font:inherit;font-size:clamp(.65rem,1vw,.9rem);cursor:pointer}',
+            '.ecf-alphabet button[aria-pressed="true"]{background:#00a4dc;color:#001822;font-weight:700}',
+            '.ecf-alphabet button:focus-visible{outline:2px solid #6ed1f2;outline-offset:-2px}.ecf-alphabet button:disabled{opacity:.25;cursor:default}',
+            '[data-ecf-current="true"]{outline:2px solid #00a4dc;outline-offset:3px}',
+            '.ecf-native-note{position:fixed;bottom:1rem;left:50%;transform:translateX(-50%);max-width:85vw;padding:.55rem .9rem;border-radius:.5rem;background:#10212ff2;color:#e2f4ff;z-index:1150;font-size:.9rem}.ecf-native-note[hidden]{display:none}',
+            '.ecf-stage.has-details~.ecf-alphabet,#effecta-coverflow-overlay.is-searching .ecf-alphabet{display:none}',
             '.ecf-icon-button{width:2.8rem;height:2.8rem;border:0;border-radius:50%;background:#ffffff1c;color:#fff;font-size:1.5rem;cursor:pointer}',
             '.ecf-icon-button:hover,.ecf-icon-button:focus-visible{background:#ffffff35;outline:2px solid #00a4dc}',
             '.ecf-stage{position:relative;flex:1;min-height:22rem;perspective:1250px;touch-action:none;user-select:none;-webkit-user-select:none}',
             '.ecf-card{position:absolute;left:50%;top:49%;width:clamp(11rem,26vw,23rem);aspect-ratio:2/3;border:0;padding:0;background:transparent;border-radius:.45rem;overflow:visible;transform-origin:center center;transition:transform .42s cubic-bezier(.22,.61,.36,1),opacity .3s ease,filter .3s ease;cursor:pointer;will-change:transform,opacity;backface-visibility:hidden;contain:layout}',
             '.ecf-stage.is-dragging .ecf-card{transition:none}',
             '.ecf-stage.is-fast-scrolling .ecf-card{transition:none}',
+            '.ecf-stage.is-locating{opacity:0;pointer-events:none}',
             '.ecf-cover-surface,.ecf-stack-layer{position:absolute;inset:0;border-radius:.45rem;overflow:hidden;background:linear-gradient(145deg,#38586b,#18272f);box-shadow:0 1.2rem 2.7rem #000c;pointer-events:none}',
             '.ecf-cover-surface{z-index:3;-webkit-box-reflect:below .6rem linear-gradient(to bottom,rgba(255,255,255,.22) 0,rgba(255,255,255,.08) 13%,transparent 29%)}',
             '.ecf-stack-layer{z-index:1;transform:translate3d(.72rem,-.48rem,0) rotate(4deg)}',
@@ -339,6 +632,7 @@
     function ensureLauncher() {
         installMenuIntegration();
         installSortTracking();
+        installSelectionTracking();
         installNativeSortObserver();
         syncLauncher();
         if (!state.launcherTimer) {
@@ -366,6 +660,7 @@
                 'button[aria-label="View settings"]', 'button[aria-describedby="selectview-popover"]'
             ].join(','));
             if (viewButton && viewButton.id !== 'effecta-coverflow-toolbar-button') {
+                captureNativeSelection();
                 if (!state.menuRestoreTimer) {
                     state.menuReturnOverflow = state.overlay && !state.overlay.hidden ? '' : document.body.style.overflow;
                 }
@@ -397,10 +692,12 @@
         // The Grid row includes a separate settings button, not a view choice.
         var nestedButton = target.closest('button');
         if (row && (!nestedButton || nestedButton === row)) {
+            var anchor = state.overlay && !state.overlay.hidden ? rememberFlowSelection() : captureNativeSelection();
             setLibraryView(getCurrentLibraryId(), row.dataset.ecfNativeViewMode || null);
             state.lastAutoOpenRoute = window.location.href;
             closeCoverFlow(false);
             syncLayoutMenuSelection();
+            restoreNativeSelection(anchor);
         }
     }
 
@@ -491,7 +788,9 @@
             var isOpen = state.overlay && !state.overlay.hidden;
             setLibraryRemembered(getCurrentLibraryId(), !isOpen);
             if (isOpen) {
+                var anchor = rememberFlowSelection();
                 closeCoverFlow();
+                restoreNativeSelection(anchor);
             } else {
                 openCoverFlow();
             }
@@ -518,13 +817,14 @@
         }
     }
 
-    function reloadSortedLibrary(sort) {
+    function reloadSortedLibrary(sort, anchorId) {
         stopArrowHold();
         closeDetails();
         setSearchVisible(false);
+        state.pendingInitial = null;
         state.activeSortBy = sort.by;
         state.activeSortOrder = sort.order;
-        return loadBooks(true);
+        return loadBooks(true, anchorId);
     }
 
     function installSortTracking() {
@@ -550,6 +850,7 @@
             var labelNode = row.querySelector('.MuiListItemText-primary,.actionSheetItemText,.listItemBodyText');
             var label = String(labelNode ? labelNode.textContent : row.textContent || '').trim();
             var sortBy = getSortFieldForLabel(label);
+            state.nativeSortAnchor = !state.overlay || state.overlay.hidden ? captureNativeSelection() : null;
             if (!sortBy) {
                 return;
             }
@@ -601,9 +902,19 @@
         var sort = readNativeStoredSort(event.key);
         if (!sort) { return; }
         var libraryId = getCurrentLibraryId();
+        var pending = state.nativeSelectionJob;
+        if (pending && pending.key === event.key && pending.signature
+            && pending.signature !== nativeSelectionSignature(readNativePageSettings(event.key))) {
+            cancelNativeSelection();
+        }
         state.sortStorageKeys[getSortContextKey()] = event.key;
         state.sortRequestSince[libraryId] = window.performance ? window.performance.now() : 0;
         rememberNativeSort(libraryId, sort.by, sort.order);
+        if (state.nativeSortAnchor) {
+            var anchor = state.nativeSortAnchor;
+            state.nativeSortAnchor = null;
+            if (anchor.scope === getSelectionScope()) { restoreNativeSelection(anchor); }
+        }
     }
 
     function rememberNativeSort(libraryId, by, order) {
@@ -652,14 +963,25 @@
                 key = key.toLowerCase();
                 // The SDK serializes arrays as repeated keys. Taking the last
                 // sortBy alone discards the primary field (often leaving SortName).
-                params[key] = (key === 'sortby' || key === 'sortorder') && params[key]
-                    ? params[key] + ',' + value : value;
+                params[key] = params[key] ? params[key] + ',' + value : value;
             });
             // CoverFlow catalog queries must never feed their own settings back.
             if (params.fields === 'PrimaryImageAspectRatio,People,ChildCount,ParentId,SortName') { return; }
             var libraryId = getCurrentLibraryId();
             var normalizeId = function normalizeId(value) { return String(value || '').replace(/-/g, '').toLowerCase(); };
-            if (!libraryId || normalizeId(params.parentid) !== normalizeId(libraryId)) { return; }
+            if (!libraryId || normalizeId(params.parentid) !== normalizeId(getNativeParentId())) { return; }
+            var scope = getSelectionScope();
+            var started = Number(resource.startTime) || 0;
+            // A native render can start before its preference event is delivered.
+            // Track paging/filters by request time, separately from the sort barrier.
+            if (started >= (state.nativeQueryTimes[scope] || 0)) {
+                var query = Object.assign({}, params);
+                Object.keys(query).forEach(function omitCredentials(key) {
+                    if (/token|api.?key|authorization|userid/i.test(key)) { delete query[key]; }
+                });
+                state.nativeQueries[scope] = query;
+                state.nativeQueryTimes[scope] = started;
+            }
             if (params.sortby && params.sortorder) {
                 if (resource.startTime < (state.sortRequestSince[libraryId] || 0)) { return; }
                 state.sortRequestSince[libraryId] = resource.startTime || 0;
@@ -1064,7 +1386,18 @@
         state.status.setAttribute('aria-live', 'polite');
         footer.append(state.searchPanel, controls, state.status);
 
-        overlay.append(state.stage, heading, footer);
+        state.alphabet = element('nav', 'ecf-alphabet');
+        state.alphabet.setAttribute('aria-label', 'Vai a una iniziale');
+        '#ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').forEach(function addInitial(letter) {
+            var button = element('button', null, letter);
+            button.type = 'button';
+            button.setAttribute('aria-label', letter === '#' ? 'Numeri e simboli' : 'Vai alla iniziale ' + letter);
+            button.setAttribute('aria-pressed', 'false');
+            button.addEventListener('click', function jumpToLetter() { selectInitial(letter); });
+            state.alphabetButtons[letter] = button;
+            state.alphabet.appendChild(button);
+        });
+        overlay.append(state.stage, state.alphabet, heading, footer);
         document.body.appendChild(overlay);
         state.overlay = overlay;
         window.addEventListener('resize', updateOverlayTop);
@@ -1083,9 +1416,12 @@
 
     async function openCoverFlow() {
         var libraryId = getCurrentLibraryId();
+        var anchor = !state.overlay || state.overlay.hidden ? captureNativeSelection() : rememberFlowSelection();
+        cancelNativeSelection();
         var sort = getCurrentSortSettings();
         var sortChanged = state.activeSortBy !== sort.by || state.activeSortOrder !== sort.order;
-        if (libraryId && state.activeLibraryId !== libraryId) {
+        if (libraryId && (state.activeLibraryId !== libraryId
+            || normalizeItemId(state.folderId || state.activeLibraryId) !== normalizeItemId(getNativeParentId()))) {
             selectLibrary(libraryId);
             sortChanged = false;
         }
@@ -1097,11 +1433,16 @@
         document.addEventListener('keydown', onKeyDown);
         window.addEventListener('wheel', onWheel, { passive: false, capture: true });
 
-        if (sortChanged && state.books.length) {
-            await reloadSortedLibrary(sort);
-        } else if (state.books.length === 0) {
-            await loadBooks();
+        var selectedId = anchor && anchor.id;
+        var selectedIndex = selectedId ? state.entries.findIndex(function sameSelected(entry) {
+            return normalizeItemId(entry.Id) === normalizeItemId(selectedId);
+        }) : -1;
+        if ((sortChanged || state.reordering) && state.books.length) {
+            await reloadSortedLibrary(sort, selectedId);
+        } else if (state.books.length === 0 || selectedId && selectedIndex < 0) {
+            await loadBooks(false, selectedId);
         } else {
+            if (selectedIndex >= 0) { state.index = selectedIndex; state.flowPosition = null; }
             renderBooks();
         }
     }
@@ -1111,7 +1452,8 @@
         closeDetails();
         state.detailCache.clear();
         state.folderStack = [];
-        state.folderId = null;
+        state.folderId = normalizeItemId(getNativeParentId()) !== normalizeItemId(libraryId) ? getNativeParentId() : null;
+        state.pendingInitial = null;
         setSearchVisible(false);
         var sort = getCurrentSortSettings();
         state.loadGeneration += 1;
@@ -1154,6 +1496,8 @@
             return;
         }
         stopArrowHold();
+        if (!state.overlay.hidden) { rememberFlowSelection(); }
+        state.pendingInitial = null;
         closeDetails();
         setSearchVisible(false);
         state.overlay.hidden = true;
@@ -1196,12 +1540,17 @@
     /****************************************************************
      *  BLOCK 06 - BOOK LOADING
      ****************************************************************/
-    async function loadBooks(preserveSelection) {
+    async function loadBooks(preserveSelection, explicitAnchorId) {
         var selected = preserveSelection && state.entries[state.index];
-        var anchorId = selected && selected.Id;
+        var anchorId = explicitAnchorId || selected && selected.Id;
         state.reordering = Boolean(anchorId);
         if (anchorId) {
-            renderPosition();
+            if (explicitAnchorId && (!state.entries[state.index]
+                || normalizeItemId(state.entries[state.index].Id) !== normalizeItemId(explicitAnchorId))) {
+                state.stage.classList.add('is-locating');
+                state.title.textContent = 'Recupero della selezione…';
+                setStatus('Recupero dell’elemento corrente…', false);
+            } else { renderPosition(); }
         } else {
             setStatus('Caricamento della biblioteca…', false);
             state.subtitle.textContent = 'Caricamento…';
@@ -1233,16 +1582,18 @@
             var total = firstResponse.TotalRecordCount == null ? page.length : firstResponse.TotalRecordCount;
             while (true) {
                 page.forEach(function stageItem(item) {
-                    if (!seen.has(item.Id)) { seen.add(item.Id); items.push(item); }
+                    var id = normalizeItemId(item.Id);
+                    if (!seen.has(id)) { seen.add(id); items.push(item); }
                 });
-                var current = anchorId && state.entries[state.index];
+                var current = !explicitAnchorId && anchorId && state.entries[state.index];
                 anchorId = current && current.Id || anchorId;
-                if (!anchorId || seen.has(anchorId) || scanned >= total || page.length === 0) { break; }
+                var foundAnchor = seen.has(normalizeItemId(anchorId));
+                if (!anchorId || foundAnchor || scanned >= total || page.length === 0) { break; }
                 page = (await loadLibraryPage(userId, parentId, state.activeCollectionType, scanned, PAGE_SIZE)).Items || [];
                 if (generation !== state.loadGeneration) { return; }
                 scanned += page.length;
             }
-            if (anchorId && !seen.has(anchorId)) {
+            if (anchorId && !seen.has(normalizeItemId(anchorId))) {
                 throw new Error('The selected item is absent from the reordered library.');
             }
             state.books = items;
@@ -1251,6 +1602,11 @@
             state.loadingComplete = state.loadingLoaded >= state.loadingTotal;
             state.reordering = false;
             rebuildEntries();
+            if (explicitAnchorId) {
+                state.index = state.entries.findIndex(function restoreAnchor(item) { return normalizeItemId(item.Id) === normalizeItemId(explicitAnchorId); });
+                state.flowPosition = null;
+            }
+            state.stage.classList.remove('is-locating');
             renderBooks();
             if (!state.loadingComplete) {
                 loadRemainingItems(userId, parentId, state.activeCollectionType, generation);
@@ -1261,6 +1617,7 @@
             }
             console.error('CoverFlow: unable to load library items.', error);
             state.reordering = false;
+            state.stage.classList.remove('is-locating');
             if (anchorId) {
                 setStatus('Riordinamento non completato: mantenuta la selezione precedente. Riprova cambiando ordine.', true);
             } else {
@@ -1300,6 +1657,8 @@
         }
         if (generation === state.loadGeneration) {
             state.loadingComplete = true;
+            applyPendingInitial();
+            updateAlphabet();
             renderPosition();
         }
     }
@@ -1365,6 +1724,7 @@
     }
 
     function getLoadingSuffix() {
+        if (state.pendingInitial) { return ' · ricerca iniziale “' + state.pendingInitial + '”…'; }
         if (state.reordering) { return ' · riordino…'; }
         if (state.loadingComplete || state.loadingTotal <= state.loadingLoaded) {
             return '';
@@ -1377,6 +1737,47 @@
             .normalize('NFD')
             .replace(/[\u0300-\u036f]/g, '')
             .toLocaleLowerCase();
+    }
+
+    function getEntryInitial(entry) {
+        var initial = normalizeLookupText(entry && (entry.SortName || getEntryTitle(entry))).charAt(0).toUpperCase();
+        return /^[A-Z]$/.test(initial) ? initial : '#';
+    }
+
+    function selectInitial(letter) {
+        stopArrowHold();
+        closeDetails();
+        window.clearTimeout(state.typeaheadTimer);
+        state.typeaheadBuffer = '';
+        if (state.searchInput) { state.searchInput.value = ''; }
+        state.pendingInitial = letter;
+        applyPendingInitial();
+        renderPosition();
+    }
+
+    function applyPendingInitial() {
+        if (!state.pendingInitial) { return; }
+        var index = state.entries.findIndex(function matchesInitial(entry) {
+            return getEntryInitial(entry) === state.pendingInitial;
+        });
+        if (index >= 0) {
+            state.index = index;
+            state.flowPosition = null;
+            state.pendingInitial = null;
+        } else if (state.loadingComplete) { state.pendingInitial = null; }
+    }
+
+    function updateAlphabet() {
+        if (!state.alphabet) { return; }
+        var initials = new Set(state.entries.map(getEntryInitial));
+        var current = state.entries[state.index];
+        var active = current ? getEntryInitial(current) : null;
+        Object.keys(state.alphabetButtons).forEach(function updateInitial(letter) {
+            var button = state.alphabetButtons[letter];
+            button.disabled = state.loadingComplete && !initials.has(letter);
+            button.setAttribute('aria-pressed', String(letter === active));
+        });
+        state.alphabetActive = active;
     }
 
     function getEntryTitle(entry) {
@@ -1410,6 +1811,7 @@
             return false;
         }
         event.preventDefault();
+        state.pendingInitial = null;
         state.typeaheadBuffer += event.key;
         window.clearTimeout(state.typeaheadTimer);
         state.typeaheadTimer = window.setTimeout(function clearTypeahead() {
@@ -1534,6 +1936,8 @@
     }
 
     function renderBooks() {
+        applyPendingInitial();
+        updateAlphabet();
         var previousCards = new Map(state.cards.map(function rememberCard(card) {
             return [card.dataset.entryKey, card];
         }));
@@ -1685,6 +2089,14 @@
         var current = state.entries[state.index];
         if (!current) {
             return;
+        }
+        rememberFlowSelection();
+        var initial = getEntryInitial(current);
+        if (initial !== state.alphabetActive && state.alphabet) {
+            var old = state.alphabetButtons[state.alphabetActive];
+            if (old) { old.setAttribute('aria-pressed', 'false'); }
+            state.alphabetButtons[initial].setAttribute('aria-pressed', 'true');
+            state.alphabetActive = initial;
         }
         if (state.searchResult) {
             var currentTitle = getEntryTitle(current) || '';
@@ -1925,6 +2337,8 @@
     }
 
     function browseFolder(entry) {
+        rememberFlowSelection();
+        state.pendingInitial = null;
         closeDetails();
         stopArrowHold();
         state.folderStack.push({ folderId: state.folderId, books: state.books, index: state.index,
@@ -2127,6 +2541,7 @@
      *  BLOCK 08 - NAVIGATION INPUTS
      ****************************************************************/
     function move(delta) {
+        state.pendingInitial = null;
         if (state.entries.length === 0) {
             return;
         }
@@ -2218,7 +2633,7 @@
             return;
         }
         if (event.ctrlKey) { return; }
-        if (event.target && event.target.closest && event.target.closest('#selectview-popover,#sort-popover')) {
+        if (event.target && event.target.closest && event.target.closest('#selectview-popover,#sort-popover,.ecf-alphabet')) {
             // Leave native settings scrolling alone without leaking a horizontal back gesture.
             if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
                 event.preventDefault();
@@ -2324,7 +2739,7 @@
 
     function onKeyDown(event) {
         var target = event.target;
-        if (target && target.closest && target.closest('#selectview-popover,#sort-popover')) { return; }
+        if (target && target.closest && target.closest('#selectview-popover,#sort-popover,.ecf-alphabet')) { return; }
         if (state.detailCard && event.key === 'Escape') {
             event.preventDefault();
             closeDetails(true);
@@ -2363,7 +2778,9 @@
                 showSeries();
             } else {
                 state.lastAutoOpenRoute = window.location.href;
+                var anchor = rememberFlowSelection();
                 closeCoverFlow();
+                restoreNativeSelection(anchor);
             }
         }
     }

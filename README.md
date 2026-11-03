@@ -32,6 +32,11 @@ official Jellyfin plugin and does not add this interface to native TV clients.
 - **Mouse, keyboard and touch.** Click side covers, use arrow keys, wheel or swipe;
   hold an arrow to accelerate. A search field supports title-prefix navigation
   and opens the keyboard on mobile.
+- **An A-Z/# side index.** Jump to the first matching initial without changing
+  the current order. Accents are normalized; # covers numbers and other symbols.
+- **The same item across views.** Keep the current item ID when switching
+  between CoverFlow, Grid and List within the same library/folder, recovering
+  its native page and highlighting it when necessary.
 - **Progressive loading.** Show an initial catalog page, then load more in the
   background. Existing visible cover nodes are reused rather than recreated.
 - **Optional group posters.** Add `coverflow-series.png` or `coverflow-series.jpg`
@@ -96,13 +101,13 @@ on access to the maintainer's home media server.
 
 ### Manual alternative
 
-Download `CoverFlow_0.4.5_Jellyfin12.zip` from
-[Releases](https://github.com/lucalcin/jellyfin-coverflow/releases/tag/v0.4.5).
+Download `CoverFlow_0.4.6_Jellyfin12.zip` from
+[Releases](https://github.com/lucalcin/jellyfin-coverflow/releases/tag/v0.4.6).
 Stop Jellyfin and extract its three files into a dedicated plugin-version
-directory such as `CoverFlow_0.4.5.0` under **your installation's plugin directory**:
+directory such as `CoverFlow_0.4.6.0` under **your installation's plugin directory**:
 
 ```text
-CoverFlow_0.4.5.0/
+CoverFlow_0.4.6.0/
   Jellyfin.Plugin.CoverFlow.dll
   meta.json
   coverflow.png
@@ -128,10 +133,26 @@ with the operating system and container configuration.
 Choose the view once in each library. For example, TV series and comics can use
 CoverFlow while photos use List and movies use Grid. CoverFlow respects those
 independent choices when moving between libraries and returning to the same URL.
-Jellyfin continues to own native Grid/List persistence; the extension does not
-rewrite its private settings. Existing CoverFlow preferences are preserved.
+Jellyfin continues to own native Grid/List persistence. To recover the selected
+item the extension may update the native page StartIndex and clear a conflicting
+alphabet constraint; it preserves the current view, sort and unrelated filters.
+Existing CoverFlow preferences are preserved.
 Preferences are local to the browser, not synchronized between devices. Clearing
 browser site data resets them; unavailable storage limits saving to the session.
+
+The A-Z/# index follows `SortName` when available, otherwise the displayed title.
+If the initial is not loaded yet, the jump waits for background pages. The
+existing catalog-window limit still applies: disabled initials mean no matching
+item in the loaded window, not necessarily none anywhere on the server.
+
+The current item is the focused/clicked native card, or a visible card if none
+was selected, and the center cover in CoverFlow. Switching views does not reset
+it to the first item. Recovering a distant native page can require metadata
+requests; a target already on the correct page can be restored immediately.
+If filters exclude it, a notice is shown and its anchor is retained rather than
+silently selecting another item. Anchors are session-local and folder-specific:
+open the same folder in both interfaces; switching does not automatically
+navigate the native client to a different folder.
 
 The keyboard button opens a real title-search field. Enter hides the mobile
 keyboard; a second click closes the field. Escape closes the card back first,

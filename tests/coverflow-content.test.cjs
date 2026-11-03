@@ -50,18 +50,21 @@ function runtime(storage = new Map()) {
         location: { hash: '#/library?topParentId=library', search: '', origin: 'https://local.test', href: 'https://local.test/web/' },
         setTimeout(fn) { timers.push(fn); return timers.length; }, clearTimeout() {},
         requestAnimationFrame(fn) { timers.push(fn); return timers.length; },
-        removeEventListener() {},
-        localStorage: { getItem: key => storage.get(key) || null, setItem: (key, value) => storage.set(key, value) },
+        removeEventListener() {}, addEventListener() {},
+        localStorage: { getItem: key => storage.get(key) || null, setItem: (key, value) => storage.set(key, value),
+            get length() { return storage.size; }, key: index => [...storage.keys()][index] },
     };
     const document = { createElement: tag => new Node(tag), getElementById: () => null,
-        body: { style: {} }, removeEventListener() {} };
+        body: { style: {} }, removeEventListener() {}, addEventListener() {} };
     const source = fs.readFileSync(path.join(__dirname, '../Jellyfin.Plugin.CoverFlow/Web/coverflow.js'), 'utf8')
         .replace('    installStyles();\n    ensureLauncher();\n    waitForApi();', `
             window.testApi = { state, renderBooks, flipCurrent, closeDetails, move, onWheel, onPointerDown,
                 onKeyDown, browseFolder, showSeries, loadLibraryPage, rebuildEntries, rememberDetails,
                 detailKind, formatDuration, getItemSubtitle, getPrimaryImageUrl, loadBooks, reloadSortedLibrary,
                 readNativeSortRequest, getCurrentSortSettings, getLibraryView, setLibraryView,
-                syncLibraryView, maybeAutoOpenRememberedLibrary, onNativeSortStorage, readNativeStoredSort };
+                syncLibraryView, maybeAutoOpenRememberedLibrary, onNativeSortStorage, readNativeStoredSort,
+                selectInitial, applyPendingInitial, getEntryInitial, rememberFlowSelection, getSelectionScope,
+                findNativeItemPage, getNativeSettingsKey, readNativePageSettings, nativeSelectionSignature, openCoverFlow };
         `);
     vm.runInNewContext(source, { window, document, console, Date, URL, URLSearchParams, DOMParser: class {
         parseFromString() { return { body: { textContent: 'Safe plot text' }, querySelectorAll: () => [] }; }
@@ -81,6 +84,117 @@ function addEntry(r, entry) {
     r.renderBooks();
     return r.state.cards[0];
 }
+
+test('the alphabet jumps by SortName, normalizes accents, handles # and keeps the catalog intact', () => {
+    const r = runtime();
+    const entries = [{ Id: 'a', Name: 'The Apple', SortName: 'Apple' }, { Id: 'e', Name: 'Élan' }, { Id: 'n', Name: '2001' }];
+    r.state.books = entries; r.state.entries = entries; r.state.index = 0; r.renderBooks();
+    r.selectInitial('E'); assert.equal(r.state.entries[r.state.index].Id, 'e');
+    r.selectInitial('#'); assert.equal(r.state.entries[r.state.index].Id, 'n');
+    r.selectInitial('A'); assert.equal(r.state.entries[r.state.index].Id, 'a');
+    assert.equal(r.state.entries, entries); assert.equal(r.state.entries.length, 3);
+    assert.equal(r.getEntryInitial(entries[0]), 'A');
+});
+
+test('an initial requested before its page is loaded is applied once and not on every append', () => {
+    const r = runtime(); r.state.loadingComplete = false;
+    addEntry(r, { Id: 'a', Name: 'Apple' }); r.selectInitial('Z');
+    assert.equal(r.state.pendingInitial, 'Z');
+    r.state.books = [{ Id: 'a', Name: 'Apple' }, { Id: 'z', Name: 'Zebra' }];
+    r.rebuildEntries(); r.renderBooks();
+    assert.equal(r.state.entries[r.state.index].Id, 'z'); assert.equal(r.state.pendingInitial, null);
+    r.move(-1); r.state.books.push({ Id: 'z2', Name: 'Zorro' }); r.rebuildEntries(); r.renderBooks();
+    assert.equal(r.state.entries[r.state.index].Id, 'a');
+});
+
+test('entering CoverFlow finds the native selected ID beyond the first page', async () => {
+    const r = runtime(); const entries = Array.from({ length: 650 }, (_, n) => ({ Id: 'item-' + n, Name: 'Item ' + n }));
+    r.state.api.getItems = async (user, q) => ({ Items: entries.slice(q.StartIndex, q.StartIndex + q.Limit), TotalRecordCount: entries.length });
+    await r.loadBooks(false, 'item-610');
+    assert.equal(r.state.entries[r.state.index].Id, 'item-610'); assert.equal(r.state.index, 610);
+});
+
+test('native selection lookup uses the native filters and finds the exact target page', async () => {
+    const r = runtime(); const entries = Array.from({ length: 630 }, (_, n) => ({ Id: 'item-' + n }));
+    const query = { parentid: 'library', limit: '100', sortby: 'SortName', sortorder: 'Ascending', genres: 'Comedy' };
+    const settings = { SortBy: ['SortName'], SortOrder: 'Ascending', Filters: { Genres: ['Comedy'] } };
+    const calls = [];
+    r.state.api.getItems = async (user, q) => {
+        calls.push(q); assert.equal(q.genres, 'Comedy');
+        return { Items: entries.slice(q.startindex, q.startindex + q.limit), TotalRecordCount: entries.length };
+    };
+    const page = await r.findNativeItemPage({ id: 'item-610' }, query, settings, () => true);
+    assert.equal(page.startIndex, 600); assert.equal(page.firstId, 'item-600');
+    assert.deepEqual(calls.map(q => q.startindex), [0, 500]);
+    assert.equal(query.limit, '100'); assert.deepEqual(settings.Filters, { Genres: ['Comedy'] });
+});
+
+test('a conflicting native letter is cleared without discarding other filters', async () => {
+    const r = runtime();
+    r.state.api.getItems = async (user, q) => {
+        assert.equal(q.namestartswith, undefined); assert.equal(q.genres, 'Drama');
+        return { Items: [{ Id: 'apple' }], TotalRecordCount: 1 };
+    };
+    const page = await r.findNativeItemPage({ id: 'apple', entry: { Name: 'Apple' } },
+        { limit: '100', namestartswith: 'T', genres: 'Drama' }, { Alphabet: 'T' }, () => true);
+    assert.equal(page.clearAlphabet, true); assert.equal(page.startIndex, 0);
+});
+
+test('selection anchors remain separate for identical libraries with different parent folders', () => {
+    const r = runtime(); r.state.folderId = 'folder-a'; addEntry(r, { Id: 'a', Name: 'A' });
+    const a = r.rememberFlowSelection();
+    r.state.folderId = 'folder-b'; addEntry(r, { Id: 'b', Name: 'B' });
+    const b = r.rememberFlowSelection();
+    assert.notEqual(a.scope, b.scope); assert.equal(r.state.selectionAnchors[a.scope].id, 'a');
+    assert.equal(r.state.selectionAnchors[b.scope].id, 'b');
+});
+
+test('a missing or cancelled native target never falls back to the first item', async () => {
+    const r = runtime(); const settings = { Filters: { Genres: ['Drama'] } };
+    r.state.api.getItems = async () => ({ Items: [{ Id: 'different' }], TotalRecordCount: 1 });
+    assert.equal(await r.findNativeItemPage({ id: 'missing' }, { limit: '100' }, settings, () => true), null);
+    assert.equal(await r.findNativeItemPage({ id: 'different' }, { limit: '100' }, settings, () => false), null);
+    assert.deepEqual(settings.Filters, { Genres: ['Drama'] });
+});
+
+test('pagination snapshots update even when a later preference event invalidates old sort responses', () => {
+    const r = runtime(); r.state.overlay.hidden = true; r.state.sortRequestSince.library = 100;
+    r.readNativeSortRequest({ startTime: 30, name: 'https://local.test/Items?parentId=library&startIndex=100&limit=50&sortBy=SortName&sortOrder=Ascending&api_key=redacted' });
+    const query = r.state.nativeQueries[r.getSelectionScope()];
+    assert.equal(query.startindex, '100'); assert.equal(query.limit, '50'); assert.equal(query.api_key, undefined);
+    r.readNativeSortRequest({ startTime: 20, name: 'https://local.test/Items?parentId=library&startIndex=0&limit=10&sortBy=SortName&sortOrder=Ascending' });
+    assert.equal(r.state.nativeQueries[r.getSelectionScope()].startindex, '100');
+});
+
+test('a newer native filter change cancels an in-flight page restoration', () => {
+    const storage = new Map(); const r = runtime(storage); r.state.overlay.hidden = true;
+    const settings = { SortBy: ['SortName'], SortOrder: 'Ascending', Filters: { Genres: ['Comedy'] } };
+    r.state.nativeSelectionJob = { key: 'movies - library', signature: r.nativeSelectionSignature(settings) };
+    storage.set('movies - library', JSON.stringify({ ...settings, Filters: { Genres: ['Drama'] } }));
+    r.onNativeSortStorage({ key: 'movies - library' });
+    assert.equal(r.state.nativeSelectionJob, null);
+});
+
+test('hidden background CoverFlow rendering cannot overwrite a newer native selection', () => {
+    const r = runtime(); addEntry(r, { Id: 'old' });
+    const scope = r.getSelectionScope(); r.state.selectionAnchors[scope] = { id: 'new', scope };
+    r.state.overlay.hidden = true; r.renderBooks();
+    assert.equal(r.state.selectionAnchors[scope].id, 'new');
+});
+
+test('reopening during a pending reorder supersedes it with the native selected item', async () => {
+    const r = runtime(); const a = { Id: 'a' }, b = { Id: 'b' };
+    r.state.books = [a, b]; r.state.entries = r.state.books; r.renderBooks();
+    let release; let calls = 0;
+    r.state.api.getItems = () => ++calls === 1 ? new Promise(resolve => { release = resolve; })
+        : Promise.resolve({ Items: [b, a], TotalRecordCount: 2 });
+    const old = r.reloadSortedLibrary({ by: 'SortName', order: 'Ascending' });
+    r.state.overlay.hidden = true;
+    const scope = r.getSelectionScope(); r.state.selectionAnchors[scope] = { id: 'b', scope, parentId: 'library' };
+    await r.openCoverFlow();
+    release({ Items: [a, b], TotalRecordCount: 2 }); await old;
+    assert.equal(r.state.entries[r.state.index].Id, 'b'); assert.equal(calls, 2);
+});
 
 test('CoverFlow, list and grid preferences are saved independently and survive reload', () => {
     const storage = new Map(); const r = runtime(storage);

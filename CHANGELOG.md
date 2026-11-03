@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.6 — 2026-11-03
+
+- Add an A-Z/# side index to CoverFlow, with normalized accents, SortName-based
+  initials, active-letter feedback and pending jumps during background loading.
+- Keep the current item ID across CoverFlow, Grid and List in the same
+  library/folder, including items beyond the first native page.
+- Track native focus, clicks and scrolling; restore the target page and focus
+  without changing the sort or unrelated filters. A conflicting native alphabet
+  constraint can be cleared so the selected item remains visible.
+- Keep selection anchors separate by server, user, library and parent folder.
+- Report excluded/missing targets instead of silently choosing another item.
+  Automatic native navigation into a different folder is not implemented.
+- Cancel stale page restoration on navigation, user selection or changed filters.
+- Track native page-query snapshots independently of sort-event timestamps.
+- Add native-page, view-switch, sorting, alphabet and mobile-geometry regression checks.
+
 ## 0.4.5 — 2026-11-03
 
 - Preserve all repeated `sortBy` parameters emitted by the Jellyfin SDK. Keeping

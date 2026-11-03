@@ -1,7 +1,7 @@
 ---
 name: "CoverFlow"
 guid: "2f53b2eb-8f39-4472-a55f-cb715c942594"
-version: "0.4.5.0"
+version: "0.4.6.0"
 targetAbi: "12.0.0.0"
 framework: "net10.0"
 overview: "A keyboard, mouse and touch CoverFlow for Jellyfin libraries."
@@ -16,5 +16,5 @@ artifacts:
   - "meta.json"
   - "coverflow.png"
 changelog: >-
-  Preserves every sortBy field in native SDK requests and follows committed
-  native sort settings even for cached results, keeping the selected item.
+  Adds an A-Z/# CoverFlow index and keeps the current item across native Grid,
+  List and CoverFlow views, recovering its page in the same library/folder.

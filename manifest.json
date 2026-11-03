@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/lucalcin/jellyfin-coverflow/main/artwork/coverflow.png",
     "versions": [
       {
+        "version": "0.4.6.0",
+        "changelog": "Adds an A-Z/# CoverFlow index and shared current-item anchors across Grid, List and CoverFlow, including native page recovery within the same library/folder. Preserves sorting and unrelated filters.",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/lucalcin/jellyfin-coverflow/releases/download/v0.4.6/CoverFlow_0.4.6_Jellyfin12.zip",
+        "checksum": "372AB5717EFD8307DEEE2887BA980F8B",
+        "timestamp": "2026-11-03T20:44:00Z"
+      },
+      {
         "version": "0.4.5.0",
         "changelog": "Fixes repeated native sortBy parameters discarding the primary sort field. Follows committed Jellyfin sort settings even with cached results while preserving the selected item and per-library view choices.",
         "targetAbi": "12.0.0.0",
