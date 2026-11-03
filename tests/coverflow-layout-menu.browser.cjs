@@ -220,13 +220,16 @@ test('installed MUI menu supports CoverFlow keyboard navigation and native album
     });
     try {
         await page.goto('http://coverflow.test/');
-        const scripts = ['runtime.bundle.js', ...fs.readdirSync(root).filter(name => name.startsWith('node_modules.') && name.endsWith('.bundle.js')), '1133.bundle.js'];
+        const scripts = ['runtime.bundle.js', ...fs.readdirSync(root).filter(name =>
+            (name.startsWith('node_modules.') || name.startsWith('78701.')) && name.endsWith('.js')), '1133.bundle.js'];
         for (const file of scripts) { await page.addScriptTag({ url: '/' + encodeURIComponent(file) }); }
         await page.evaluate(() => {
             webpackChunk.push([[987654321], {}, require => { window.nativeRequire = require; }]);
             const React = nativeRequire(63696); const createRoot = nativeRequire(78325).createRoot;
             const MenuItem = nativeRequire(85637).A; const MenuList = nativeRequire(29095).A;
             const Text = nativeRequire(60434).A; const Icon = nativeRequire(44790).A;
+            const ArrowUp = nativeRequire(16935).A; const ArrowDown = nativeRequire(46342).A;
+            const useLocalStorage = nativeRequire(1161).Mj;
             const h = React.createElement;
             window.nativeChoice = 'grid'; window.nativeSort = { by: 'SortName', order: 'Ascending' };
             window.ApiClient.getUserViews = async () => ({ Items: [{ Id: 'library', CollectionType: 'music' }] });
@@ -249,15 +252,15 @@ test('installed MUI menu supports CoverFlow keyboard navigation and native album
                 h(Text, { primary: index ? 'Vista a Elenco' : 'Vista Griglia' }))));
             }
             function SortMenu() {
-                const [sort, setSort] = React.useState(window.nativeSort);
-                return h(MenuList, null, ...[['Nome', 'SortName'], ['Artista album', 'AlbumArtist,SortName']].map(([label, by]) => h(MenuItem, {
+                const [saved, setSaved] = useLocalStorage('Albums - library', { SortBy: ['SortName'], SortOrder: 'Ascending' });
+                const sort = { by: saved.SortBy.join(','), order: saved.SortOrder };
+                return h(MenuList, null, ...[['Nome', 'SortName'], ['Artista album', 'AlbumArtist,SortName'], ['Aggiunto il', 'DateCreated,SortName']].map(([label, by]) => h(MenuItem, {
                     key: by, 'data-sort': by, onClick: () => {
                         const next = { by, order: sort.by === by && sort.order === 'Ascending' ? 'Descending' : 'Ascending' };
-                        window.nativeSort = next; setSort(next);
+                        window.nativeSort = next; setSaved({ SortBy: by.split(','), SortOrder: next.order });
                     },
-                }, h(Text, { primary: label }), h(Icon, null, sort.by === by && h('svg', {
-                    'data-testid': sort.order === 'Ascending' ? 'ArrowUpwardIcon' : 'ArrowDownwardIcon',
-                })))));
+                }, h(Text, { primary: label }), h(Icon, null, sort.by === by
+                    && h(sort.order === 'Ascending' ? ArrowUp : ArrowDown, { fontSize: 'small' })))));
             }
             window.createNativeMenu = () => mountMenu('selectview-popover', ViewMenu);
             window.createSortMenu = () => mountMenu('sort-popover', SortMenu);
@@ -275,6 +278,7 @@ test('installed MUI menu supports CoverFlow keyboard navigation and native album
         phase = 'load CoverFlow after keyboard activation';
         await page.waitForFunction(() => window.__effectaBookCoverFlow.entries.length === 2, null, { timeout: 5000 });
         await page.evaluate(() => window.createSortMenu());
+        assert.ok(await page.locator('#sort-popover svg path').count() > 0);
         phase = 'choose album artist';
         await page.locator('[data-sort="AlbumArtist,SortName"]').click();
         await page.waitForFunction(() => window.__effectaBookCoverFlow.activeSortBy === 'AlbumArtist,SortName', null, { timeout: 5000 });
@@ -285,6 +289,14 @@ test('installed MUI menu supports CoverFlow keyboard navigation and native album
         phase = 'reverse artist order with keyboard';
         await page.waitForFunction(() => window.__effectaBookCoverFlow.activeSortOrder === 'Descending', null, { timeout: 5000 });
         assert.equal(await page.evaluate(() => window.nativeSort.order), 'Descending');
+        assert.equal(await page.evaluate(() => window.__effectaBookCoverFlow.entries[window.__effectaBookCoverFlow.index].Id), 'swan');
+        phase = 'follow the native setting without a click or a network request';
+        await page.evaluate(() => {
+            localStorage.setItem('Albums - library', JSON.stringify({ SortBy: ['DateCreated', 'SortName'], SortOrder: 'Descending' }));
+            window.dispatchEvent(new StorageEvent('local-storage', { key: 'Albums - library' }));
+        });
+        await page.waitForFunction(() => window.__effectaBookCoverFlow.activeSortBy === 'DateCreated,SortName'
+            && window.__effectaBookCoverFlow.activeSortOrder === 'Descending', null, { timeout: 5000 });
         assert.equal(await page.evaluate(() => window.__effectaBookCoverFlow.entries[window.__effectaBookCoverFlow.index].Id), 'swan');
         assert.deepEqual(errors, []);
     } catch (error) {

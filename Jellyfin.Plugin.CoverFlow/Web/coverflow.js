@@ -77,6 +77,7 @@
         typeaheadTimer: null,
         sortCaptureInstalled: false,
         sortPreferences: Object.create(null),
+        sortStorageKeys: Object.create(null),
         sortResourceObserver: null,
         sortRequestSince: Object.create(null),
         reordering: false,
@@ -553,21 +554,56 @@
                 return;
             }
             var libraryId = getCurrentLibraryId();
+            var previous = getCurrentSortSettings();
+            var nextOrder = previous.by === sortBy && previous.order === 'Ascending' ? 'Descending' : 'Ascending';
             state.sortRequestSince[libraryId] = window.performance ? window.performance.now() : 0;
             // Read after React commits: the arrow now describes the resulting
             // order, not the order that was selected before the click.
             window.setTimeout(function followNativeSortSelection() {
                 if (libraryId !== getCurrentLibraryId()) { return; }
+                var stored = readNativeStoredSort();
+                if (stored) { rememberNativeSort(libraryId, stored.by, stored.order); return; }
                 if (!readNativeSortMenu()) {
-                    var previous = getCurrentSortSettings();
-                    rememberNativeSort(libraryId, sortBy, previous.by === sortBy
-                        && previous.order === 'Ascending' ? 'Descending' : 'Ascending');
+                    rememberNativeSort(libraryId, sortBy, nextOrder);
                 }
             }, 0);
         }
         document.addEventListener('click', captureSortChoice, true);
         document.addEventListener('keydown', captureSortChoice, true);
+        // Jellyfin's useLocalStorage hook emits this even when the query is
+        // cached. Read the committed setting; never write native preferences.
+        window.addEventListener('local-storage', onNativeSortStorage);
         state.sortCaptureInstalled = true;
+    }
+
+    function getSortContextKey() {
+        return getPreferenceKey() + ':' + window.location.href;
+    }
+
+    function readNativeStoredSort(key) {
+        key = key || state.sortStorageKeys[getSortContextKey()];
+        var libraryId = getCurrentLibraryId();
+        if (!key || !libraryId) { return null; }
+        var separator = key.lastIndexOf(' - ');
+        var normalizeId = function normalizeId(value) { return String(value).replace(/-/g, '').toLowerCase(); };
+        if (separator <= 0 || normalizeId(key.slice(separator + 3)) !== normalizeId(libraryId)) { return null; }
+        try {
+            var value = JSON.parse(window.localStorage.getItem(key) || 'null');
+            var by = value && (Array.isArray(value.SortBy) ? value.SortBy.join(',') : value.SortBy);
+            if (!by || !/^[A-Za-z][A-Za-z0-9]*(,[A-Za-z][A-Za-z0-9]*)*$/.test(by)
+                || value.SortOrder !== 'Ascending' && value.SortOrder !== 'Descending') { return null; }
+            return { by: by, order: value.SortOrder };
+        } catch (error) { return null; }
+    }
+
+    function onNativeSortStorage(event) {
+        if (!state.api || !event.key) { return; }
+        var sort = readNativeStoredSort(event.key);
+        if (!sort) { return; }
+        var libraryId = getCurrentLibraryId();
+        state.sortStorageKeys[getSortContextKey()] = event.key;
+        state.sortRequestSince[libraryId] = window.performance ? window.performance.now() : 0;
+        rememberNativeSort(libraryId, sort.by, sort.order);
     }
 
     function rememberNativeSort(libraryId, by, order) {
@@ -612,7 +648,13 @@
             var server = typeof state.api.serverAddress === 'function' ? state.api.serverAddress() : window.location.origin;
             if (url.origin !== new URL(server, window.location.href).origin) { return; }
             var params = Object.create(null);
-            url.searchParams.forEach(function readParameter(value, key) { params[key.toLowerCase()] = value; });
+            url.searchParams.forEach(function readParameter(value, key) {
+                key = key.toLowerCase();
+                // The SDK serializes arrays as repeated keys. Taking the last
+                // sortBy alone discards the primary field (often leaving SortName).
+                params[key] = (key === 'sortby' || key === 'sortorder') && params[key]
+                    ? params[key] + ',' + value : value;
+            });
             // CoverFlow catalog queries must never feed their own settings back.
             if (params.fields === 'PrimaryImageAspectRatio,People,ChildCount,ParentId,SortName') { return; }
             var libraryId = getCurrentLibraryId();
@@ -685,7 +727,7 @@
         var parameters = new URLSearchParams(window.location.search + '&' + hashQuery);
         var routeSortBy = parameters.get('sortBy') || parameters.get('SortBy');
         var routeSortOrder = parameters.get('sortOrder') || parameters.get('SortOrder');
-        var native = state.sortPreferences[getCurrentLibraryId()];
+        var native = readNativeStoredSort() || state.sortPreferences[getCurrentLibraryId()];
         return {
             by: native && native.by || routeSortBy || 'SortName',
             order: native && native.order || routeSortOrder || 'Ascending'

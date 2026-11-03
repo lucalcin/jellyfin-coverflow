@@ -61,7 +61,7 @@ function runtime(storage = new Map()) {
                 onKeyDown, browseFolder, showSeries, loadLibraryPage, rebuildEntries, rememberDetails,
                 detailKind, formatDuration, getItemSubtitle, getPrimaryImageUrl, loadBooks, reloadSortedLibrary,
                 readNativeSortRequest, getCurrentSortSettings, getLibraryView, setLibraryView,
-                syncLibraryView, maybeAutoOpenRememberedLibrary };
+                syncLibraryView, maybeAutoOpenRememberedLibrary, onNativeSortStorage, readNativeStoredSort };
         `);
     vm.runInNewContext(source, { window, document, console, Date, URL, URLSearchParams, DOMParser: class {
         parseFromString() { return { body: { textContent: 'Safe plot text' }, querySelectorAll: () => [] }; }
@@ -218,6 +218,49 @@ test('native sort requests are scoped per library and ignore old or CoverFlow re
     assert.equal(r.getCurrentSortSettings().by, 'SortName');
     r.window.location.hash = '#/library?topParentId=library';
     assert.equal(r.getCurrentSortSettings().order, 'Descending');
+});
+
+test('native SDK repeated sort parameters retain every field in priority order', () => {
+    const r = runtime(); r.state.overlay.hidden = true;
+    r.readNativeSortRequest({ startTime: 20,
+        name: 'https://local.test/Items?parentId=library&sortBy=DateCreated&sortBy=SortName&sortOrder=Descending' });
+    assert.equal(r.getCurrentSortSettings().by, 'DateCreated,SortName');
+    assert.equal(r.getCurrentSortSettings().order, 'Descending');
+    r.readNativeSortRequest({ startTime: 30,
+        name: 'https://local.test/Items?parentId=library&sortBy=ProductionYear&sortBy=PremiereDate&sortBy=SortName&sortOrder=Ascending' });
+    assert.equal(r.getCurrentSortSettings().by, 'ProductionYear,PremiereDate,SortName');
+});
+
+test('native stored sorting updates a cached catalog without rewriting native settings', async () => {
+    const storage = new Map(); const r = runtime(storage);
+    const selected = { Id: 'winnie', Type: 'Movie' }; addEntry(r, selected);
+    r.state.api.getItems = async (user, q) => {
+        assert.equal(q.SortBy, 'DateCreated,SortName'); assert.equal(q.SortOrder, 'Descending');
+        return { Items: [{ Id: 'other' }, selected], TotalRecordCount: 2 };
+    };
+    const native = JSON.stringify({ SortBy: ['DateCreated', 'SortName'], SortOrder: 'Descending', Filters: { IsPlayed: true } });
+    storage.set('Movies - library', native);
+    r.onNativeSortStorage({ key: 'Movies - library' });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(r.state.activeSortBy, 'DateCreated,SortName'); assert.equal(r.state.activeSortOrder, 'Descending');
+    assert.equal(r.state.entries[r.state.index].Id, 'winnie'); assert.equal(r.state.index, 1);
+    assert.equal(storage.get('Movies - library'), native);
+    r.readNativeSortRequest({ startTime: 100, name: 'https://local.test/Items?ParentId=library&SortBy=SortName&SortOrder=Ascending' });
+    assert.equal(r.getCurrentSortSettings().by, 'DateCreated,SortName');
+    assert.equal(r.getCurrentSortSettings().order, 'Descending');
+});
+
+test('native sort storage ignores unrelated libraries and malformed preferences', () => {
+    const storage = new Map(); const r = runtime(storage); r.state.overlay.hidden = true;
+    storage.set('Movies - another-library', JSON.stringify({ SortBy: ['DateCreated', 'SortName'], SortOrder: 'Descending' }));
+    r.onNativeSortStorage({ key: 'Movies - another-library' });
+    assert.equal(r.getCurrentSortSettings().by, 'SortName');
+    for (const value of ['null', '[]', '{bad json', '{"SortBy":["DateCreated"],"SortOrder":"unknown"}']) {
+        storage.set('Movies - library', value);
+        assert.equal(r.readNativeStoredSort('Movies - library'), null);
+        r.onNativeSortStorage({ key: 'Movies - library' });
+        assert.equal(r.getCurrentSortSettings().by, 'SortName');
+    }
 });
 
 test('sorting inside a comic folder keeps the hierarchy and reorders its parent on return', async () => {

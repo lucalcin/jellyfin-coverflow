@@ -96,13 +96,13 @@ on access to the maintainer's home media server.
 
 ### Manual alternative
 
-Download `CoverFlow_0.4.4_Jellyfin12.zip` from
-[Releases](https://github.com/lucalcin/jellyfin-coverflow/releases/tag/v0.4.4).
+Download `CoverFlow_0.4.5_Jellyfin12.zip` from
+[Releases](https://github.com/lucalcin/jellyfin-coverflow/releases/tag/v0.4.5).
 Stop Jellyfin and extract its three files into a dedicated plugin-version
-directory such as `CoverFlow_0.4.4.0` under **your installation's plugin directory**:
+directory such as `CoverFlow_0.4.5.0` under **your installation's plugin directory**:
 
 ```text
-CoverFlow_0.4.4.0/
+CoverFlow_0.4.5.0/
   Jellyfin.Plugin.CoverFlow.dll
   meta.json
   coverflow.png
@@ -184,7 +184,10 @@ npm run test:browser
 `CHROMIUM_EXECUTABLE` can select an existing Chromium/Chrome binary. The optional
 `JELLYFIN_WEB_ROOT` environment variable enables an additional test against an
 extracted copy of the installed public Web bundles, including real React and
-MUI MenuItem/MenuList components. No credentials or live library are required.
+MUI MenuItem/MenuList components, SVG arrows and the useLocalStorage hook. For
+the Jellyfin 12.4 test, include the `78701.*.chunk.js` and
+`node_modules.usehooks-ts.*.chunk.js` dependencies as well as the vendor bundles.
+No credentials or live library are required.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [CHANGELOG.md](CHANGELOG.md).
 

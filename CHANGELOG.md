@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.5 — 2026-11-03
+
+- Preserve all repeated `sortBy` parameters emitted by the Jellyfin SDK. Keeping
+  only the last field could replace Date Added, Album Artist and other criteria
+  with the `SortName` tie-breaker, reverting CoverFlow to alphabetical order.
+- Listen read-only to Jellyfin's committed native sort preferences so cached
+  queries also update CoverFlow without requiring a new network response.
+- Prefer committed settings over stale requests and capture fallback direction
+  before the native click handler changes state.
+- Keep the selected item and per-library view choices intact.
+- Exercise real Jellyfin SVG arrows and the native useLocalStorage hook in the
+  optional browser test, plus repeated-parameter and cache regression checks.
+
 ## 0.4.4 — 2026-11-03
 
 - Remember CoverFlow, Grid and List independently for each library.
