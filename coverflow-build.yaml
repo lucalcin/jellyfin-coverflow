@@ -1,7 +1,7 @@
 ---
 name: "CoverFlow"
 guid: "2f53b2eb-8f39-4472-a55f-cb715c942594"
-version: "0.4.6.0"
+version: "0.4.7.0"
 targetAbi: "12.0.0.0"
 framework: "net10.0"
 overview: "A keyboard, mouse and touch CoverFlow for Jellyfin libraries."
@@ -16,5 +16,5 @@ artifacts:
   - "meta.json"
   - "coverflow.png"
 changelog: >-
-  Adds an A-Z/# CoverFlow index and keeps the current item across native Grid,
-  List and CoverFlow views, recovering its page in the same library/folder.
+  Follows the Jellyfin interface language with native translations, live label
+  updates, accessible action icons and safe English/Italian fallbacks.

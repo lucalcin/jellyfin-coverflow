@@ -107,6 +107,190 @@
     window.__effectaBookCoverFlow = state;
 
     /****************************************************************
+     *  LOCALIZATION - JELLYFIN DICTIONARIES AND SAFE FALLBACKS
+     *
+     *  Prefer the already-loaded native singleton. The webpack bridge
+     *  is optional and has no fixed module IDs or added modules. Only
+     *  the uniquely identified globalize factory may be required.
+     *  A changed frontend must leave the local fallback usable.
+     ****************************************************************/
+    var language = { native: null, ready: false, locale: '', nodes: new Set(), attempts: 0, nextAttempt: 0, generation: 0 };
+    // Each entry is [Jellyfin key, English fallback, Italian fallback].
+    // CoverFlow-only instructions use local keys and fall back to English.
+    var messages = {
+        loading: [null, 'Loading…', 'Caricamento…'],
+        previous: ['Previous', 'Previous', 'Precedente'], next: ['Next', 'Next', 'Successivo'],
+        back: ['ButtonBack', 'Back', 'Indietro'], search: ['Search', 'Search', 'Cerca'],
+        folder: ['LabelFolder', 'Folder', 'Cartella'], series: ['Series', 'Series', 'Serie TV'],
+        episode: ['Episode', 'Episode', 'Episodio'], episodes: ['Episodes', 'Episodes', 'Episodi'],
+        season: ['Season', 'Season', 'Stagione'], specials: ['OptionSpecialEpisode', 'Specials', 'Speciali'],
+        disc: ['Disc', 'Disc', 'Disco'], album: ['Album', 'Album', 'Album'],
+        songs: ['HeaderTracks', 'Tracks', 'Tracce'], book: ['Books', 'Books', 'Libri'],
+        overview: ['Overview', 'Overview', 'Dettagli'], items: ['Items', 'Items', 'Elementi'],
+        library: ['HeaderLibraries', 'Libraries', 'Librerie'], untitled: ['Unknown', 'Unknown', 'Sconosciuto'],
+        noItems: ['MessageNoItemsAvailable', 'No items found', 'Nessun elemento trovato'],
+        retry: ['Retry', 'Retry', 'Riprova'], more: ['ShowMore', 'Show more', 'Mostra di più'],
+        error: ['ErrorDefault', 'Unable to complete the request. Please try again.', 'Impossibile completare la richiesta. Riprova.'],
+        noContent: ['MessageNoItemsAvailable', 'No content available.', 'Nessun contenuto disponibile.'],
+        itemCount: ['ItemCount', '{0} items', '{0} elementi'],
+        trackCount: ['ValueSongCount', '{0} songs', '{0} brani'],
+        oneTrack: ['ValueOneSong', '1 song', '1 brano'],
+        episodeCount: ['ValueEpisodeCount', '{0} episodes', '{0} episodi'],
+        oneEpisode: ['ValueOneEpisode', '1 episode', '1 episodio'],
+        seriesCount: ['ValueSeriesCount', '{0} series', '{0} serie'],
+        minutes: ['ValueMinutes', '{0} min', '{0} min'],
+        noPlot: [null, 'No overview available in Jellyfin metadata.', 'Nessuna trama disponibile nei metadati Jellyfin.'],
+        toggle: [null, 'Toggle CoverFlow', 'Attiva o disattiva CoverFlow'],
+        keyboard: [null, 'Show keyboard to search by initial letters', 'Mostra tastiera per cercare per iniziali'],
+        initials: [null, 'Search by initial letters', 'Cerca per iniziali'],
+        prefix: [null, 'Title: enter the first letters…', 'Titolo: scrivi le iniziali…'],
+        alphabet: [null, 'Jump to an initial', 'Vai a una iniziale'],
+        symbols: [null, 'Numbers and symbols', 'Numeri e simboli'],
+        letter: [null, 'Jump to {0}', 'Vai alla iniziale {0}'],
+        showContent: [null, 'Show content: {0}', 'Mostra contenuto: {0}'],
+        contentOf: [null, 'Content of {0}', 'Contenuto di {0}'],
+        scrollContent: [null, 'Scrollable content', 'Contenuto scorrevole'],
+        cover: ['ButtonBack', 'Back to cover', 'Torna alla copertina'],
+        browse: ['Browse', 'Browse', 'Sfoglia'],
+        openNative: [null, 'Open in Jellyfin', 'Apri in Jellyfin'],
+        noPrefix: [null, 'No title starts with these letters', 'Nessun titolo con queste iniziali'],
+        searching: [null, 'Searching titles still loading…', 'Ricerca nei titoli ancora in caricamento…'],
+        restore: [null, 'Restoring the current item…', 'Recupero dell’elemento corrente…'],
+        sameFolder: [null, 'Selection saved in its folder: open the same folder in Jellyfin.', 'La selezione resta memorizzata nella sua cartella: apri la stessa cartella in Jellyfin.'],
+        excluded: [null, 'The current item is excluded by this view’s filters.', 'L’elemento corrente non è presente nei filtri di questa vista.'],
+        restoreError: [null, 'Selection saved; unable to restore the native page.', 'Selezione conservata; impossibile ripristinare la pagina nativa.'],
+        sortError: [null, 'Sorting incomplete; previous selection retained. Try changing the order again.', 'Riordinamento non completato: mantenuta la selezione precedente. Riprova cambiando ordine.']
+    };
+
+    function connectNativeTranslations() {
+        if (language.native || Date.now() < language.nextAttempt || language.attempts >= 12) { return; }
+        language.attempts++; language.nextAttempt = Date.now() + 5000;
+        try {
+            var chunks = window.webpackChunk;
+            if (!Array.isArray(chunks)) { return; }
+            chunks.push([[], {}, function connectGlobalize(requireNative) {
+                var factories = requireNative.m || {};
+                var candidates = Object.keys(factories).filter(function isGlobalize(id) {
+                    var source = String(factories[id]);
+                    return source.includes('Translation dictionary is empty.') && source.includes('getCurrentLocale');
+                });
+                if (candidates.length !== 1) { return; }
+                var exports = requireNative(candidates[0]);
+                var native = [exports].concat(Object.keys(exports).map(function exportedValue(key) { return exports[key]; }))
+                    .find(function translator(value) {
+                        return value && typeof value.translate === 'function' && typeof value.getCurrentLocale === 'function';
+                    });
+                if (native) {
+                    language.native = native;
+                    language.locale = '';
+                    window.setTimeout(syncLanguage, 0);
+                }
+            }]);
+        } catch (error) { /* Optional native integration; never stop the carousel. */ }
+    }
+
+    function localeName() {
+        var root = document.documentElement;
+        var locale = String(root && root.getAttribute('lang') || language.native && language.native.getCurrentLocale()
+            || window.navigator && window.navigator.language || 'en-us').replace(/_/g, '-');
+        try { return Intl.getCanonicalLocales(locale)[0].toLowerCase(); } catch (error) { return 'en-us'; }
+    }
+
+    function nativeText(key, args) {
+        if (!key || !language.native || !language.ready) { return null; }
+        try {
+            var value = language.native.translate.apply(language.native, [key].concat(args || []));
+            return value && value !== key ? value : null;
+        } catch (error) { return null; }
+    }
+
+    function t(key) {
+        var args = Array.prototype.slice.call(arguments, 1);
+        if ((key === 'showContent' || key === 'contentOf') && !args[0]) { args[0] = t('untitled'); }
+        if (key === 'catalogStatus') {
+            return args[0].toLocaleString(language.locale || 'en-us') + ' / ' + args[1].toLocaleString(language.locale || 'en-us')
+                + ' · ' + t(args[2]) + ' · ↔' + getLoadingSuffix()
+                + (state.typeaheadBuffer ? ' · ' + t('search') + ' “' + state.typeaheadBuffer + '”' : '');
+        }
+        if (key === 'seriesBadge') { return t('seriesCount', args[0]); }
+        if (key === 'sectionNumber') { return t(args[0]) + ' ' + args[1].toLocaleString(language.locale || 'en-us'); }
+        if (key === 'moreCount') { return t('more') + ' (' + args[0] + '/' + args[1] + ')'; }
+        if (key === 'browseFlow') { return t('browse') + ' · CoverFlow'; }
+        if (key === 'detailMetadata') { return detailMetadata(args[0]); }
+        if (key === 'itemSubtitle') { return getItemSubtitle(args[0]); }
+        if (key === 'bookSubtitle') { return getBookSubtitle(args[0]); }
+        var message = messages[key] || [null, key, key];
+        var native = nativeText(message[0], args);
+        if (native) { return native; }
+        var text = message[language.locale.split('-')[0] === 'it' ? 2 : 1];
+        return text.replace(/\{(\d+)\}/g, function parameter(match, index) {
+            var value = args[Number(index)];
+            return value === undefined ? match : typeof value === 'number' ? value.toLocaleString(language.locale || 'en-us') : String(value);
+        });
+    }
+
+    function translated(node, key, args, attribute) {
+        node.ecfTranslations = node.ecfTranslations || {};
+        node.ecfTranslations[attribute || 'textContent'] = { key: key, args: args || [] };
+        language.nodes.add(node);
+        applyTranslation(node, attribute || 'textContent');
+        return node;
+    }
+
+    function applyTranslation(node, attribute) {
+        var recipe = node.ecfTranslations[attribute];
+        var text = t.apply(null, [recipe.key].concat(recipe.args));
+        if (attribute === 'textContent') { node.textContent = text; } else { node.setAttribute(attribute, text); }
+    }
+
+    function translatedElement(tag, className, key, args) {
+        return translated(element(tag, className), key, args);
+    }
+
+    function clearTextTranslation(node) {
+        if (node.ecfTranslations) { delete node.ecfTranslations.textContent; }
+    }
+
+    function refreshTranslations() {
+        language.nodes.forEach(function update(node) {
+            if (!node.isConnected) { language.nodes.delete(node); return; }
+            Object.keys(node.ecfTranslations).forEach(function attribute(name) { applyTranslation(node, name); });
+        });
+        // Covers, focus, animation, error state and detail scroll stay intact.
+    }
+
+    function pruneTranslations() {
+        language.nodes.forEach(function prune(node) { if (!node.isConnected) { language.nodes.delete(node); } });
+    }
+
+    function syncLanguage() {
+        var previousNative = language.native;
+        connectNativeTranslations();
+        var locale = localeName();
+        if (locale === language.locale && previousNative === language.native) { return; }
+        language.locale = locale;
+        var generation = ++language.generation;
+        refreshTranslations();
+        if (language.native && typeof language.native.loadStrings === 'function') {
+            // Native dictionaries load asynchronously after html[lang] changes.
+            Promise.resolve().then(function waitForDictionary() { return language.native.loadStrings('core'); })
+                .then(function refreshLoadedDictionary() {
+                    if (generation === language.generation) { language.ready = true; refreshTranslations(); }
+                }).catch(function keepFallback() {});
+        } else if (language.native) {
+            language.ready = true;
+            refreshTranslations();
+        }
+    }
+
+    function installLanguageTracking() {
+        syncLanguage();
+        if (document.documentElement && typeof MutationObserver !== 'undefined') {
+            new MutationObserver(syncLanguage).observe(document.documentElement, { attributes: true, attributeFilter: ['lang', 'dir'] });
+        }
+    }
+
+    /****************************************************************
      *  BLOCK 02 - SAFE DOM HELPERS
      ****************************************************************/
     function element(tagName, className, text) {
@@ -124,7 +308,7 @@
         if (!state.status) {
             return;
         }
-        state.status.textContent = message || '';
+        translated(state.status, message || '', Array.prototype.slice.call(arguments, 2));
         state.status.classList.toggle('is-error', Boolean(isError));
     }
 
@@ -239,7 +423,7 @@
             state.selectionNote.setAttribute('role', 'status');
             document.body.appendChild(state.selectionNote);
         }
-        state.selectionNote.textContent = message;
+        translated(state.selectionNote, message);
         state.selectionNote.hidden = !message;
     }
 
@@ -328,7 +512,7 @@
         if (!anchor || !anchor.id) { return; }
         cancelNativeSelection();
         if (anchor.scope !== getSelectionScope()) {
-            selectionMessage('La selezione resta memorizzata nella sua cartella: apri la stessa cartella in Jellyfin.');
+            selectionMessage('sameFolder');
             window.setTimeout(function hideFolderNotice() { selectionMessage(''); }, 4500);
             return;
         }
@@ -364,7 +548,7 @@
                     if (!isCurrent()) { return; }
                     if (!result) {
                         cancelNativeSelection();
-                        selectionMessage('L’elemento corrente non è presente nei filtri di questa vista.');
+                        selectionMessage('excluded');
                         window.setTimeout(function hideMissingSelection() { selectionMessage(''); }, 4500);
                         return;
                     }
@@ -407,12 +591,12 @@
             } catch (error) {
                 job.busy = false;
                 console.warn('CoverFlow: unable to restore the native selection.', error);
-                cancelNativeSelection(); selectionMessage('Selezione conservata; impossibile ripristinare la pagina nativa.');
+                cancelNativeSelection(); selectionMessage('restoreError');
                 return;
             }
             if (state.nativeSelectionJob === job) { job.timer = window.setTimeout(locate, 100); }
         }
-        selectionMessage('Recupero dell’elemento corrente…');
+        selectionMessage('restore');
         job.timer = window.setTimeout(locate, 80);
     }
 
@@ -561,6 +745,7 @@
             '.ecf-back-footer{display:flex;gap:.4rem;padding:.6rem .8rem;border-top:1px solid #ffffff1a;flex:none}',
             '.ecf-detail-action{display:block;width:100%;border:1px solid #5cc9ed66;border-radius:.35rem;background:#00a4dc1a;color:#a7e5fa;padding:.5rem;font:inherit;font-size:.9em;cursor:pointer;text-align:center}',
             '.ecf-detail-action:hover,.ecf-detail-action:focus-visible{background:#00a4dc40;outline:2px solid #6ed1f2}',
+            '.ecf-back-footer .ecf-detail-action.ecf-icon-button{display:inline-flex;align-items:center;justify-content:center;width:2.75rem;height:2.75rem;padding:0;font-size:1.4rem}',
             '.ecf-stage.has-details{touch-action:pan-y}',
             '.ecf-stage.has-details .ecf-card:not(.is-flipped){opacity:.22!important;pointer-events:none!important}',
             '.ecf-stage.has-details .ecf-cover-surface{-webkit-box-reflect:unset}',
@@ -655,6 +840,8 @@
             var target = event.target;
             if (!target || !target.closest) { return; }
             var viewButton = target.closest([
+                'button[title=' + JSON.stringify(nativeText('ViewSettings') || 'View settings') + ']',
+                'button[aria-label=' + JSON.stringify(nativeText('ViewSettings') || 'View settings') + ']',
                 '.btnSelectView', 'button[title="Mostra impostazioni"]',
                 'button[aria-label="Mostra impostazioni"]', 'button[title="View settings"]',
                 'button[aria-label="View settings"]', 'button[aria-describedby="selectview-popover"]'
@@ -742,6 +929,7 @@
     }
 
     function syncLauncher() {
+        syncLanguage();
         if (state.menuRoot && !state.menuRoot.isConnected) {
             releaseLayoutMenu();
         }
@@ -756,6 +944,9 @@
         }
 
         var viewButton = Array.from(document.querySelectorAll([
+            'button[aria-describedby="selectview-popover"]',
+            'button[title=' + JSON.stringify(nativeText('ViewSettings') || 'View settings') + ']',
+            'button[aria-label=' + JSON.stringify(nativeText('ViewSettings') || 'View settings') + ']',
             'button[title="Mostra impostazioni"]',
             'button[aria-label="Mostra impostazioni"]',
             'button[title="View settings"]',
@@ -775,7 +966,7 @@
         button.removeAttribute('aria-describedby');
         button.removeAttribute('aria-controls');
         button.setAttribute('title', 'CoverFlow');
-        button.setAttribute('aria-label', 'Attiva o disattiva CoverFlow');
+        translated(button, 'toggle', [], 'aria-label');
         button.setAttribute('aria-pressed', 'false');
 
         var originalIcon = button.querySelector('svg');
@@ -838,7 +1029,8 @@
                 : null;
             if (!row) {
                 var button = event.target && event.target.closest && event.target.closest(
-                    'button[title="Ordina"],button[aria-label="Ordina"],button[title="Sort"],button[aria-describedby="sort-popover"]'
+                    'button[title="Ordina"],button[aria-label="Ordina"],button[title="Sort"],button[aria-describedby="sort-popover"],'
+                    + 'button[title=' + JSON.stringify(nativeText('Sort') || 'Sort') + ']'
                 );
                 if (button) {
                     [0, 80, 250].forEach(function readOpenedSort(delay) {
@@ -1024,6 +1216,18 @@
             'Cartelle': 'IsFolder,SortName',
             'Folders': 'IsFolder,SortName'
         };
+        var nativeFields = {
+            Name: 'SortName', OptionRandom: 'Random', AlbumArtist: 'AlbumArtist,SortName',
+            OptionCommunityRating: 'CommunityRating,SortName', OptionCriticRating: 'CriticRating,SortName',
+            OptionDateAdded: 'DateCreated,SortName', OptionDatePlayed: 'DatePlayed,SortName',
+            OptionParentalRating: 'OfficialRating,SortName', OptionPlayCount: 'PlayCount,SortName',
+            OptionReleaseDate: 'ProductionYear,PremiereDate,SortName', Runtime: 'Runtime,SortName',
+            IndexNumber: 'IndexNumber,SortName', Folders: 'IsFolder,SortName'
+        };
+        Object.keys(nativeFields).forEach(function translatedSort(key) {
+            var text = nativeText(key);
+            if (text) { fields[text] = nativeFields[key]; }
+        });
         var key = Object.keys(fields).find(function matchTranslatedLabel(value) {
             return value.toLocaleLowerCase() === label.toLocaleLowerCase();
         });
@@ -1100,10 +1304,10 @@
 
         menuItems.forEach(function markNativeView(row, index) {
             var label = row.querySelector('.MuiListItemText-primary,.actionSheetItemText,.listItemBodyText');
-            if (modernMenu || label && /^(Vista Griglia|Vista a Elenco|Grid View|List View)$/i.test(String(label.textContent).trim())) {
+            if (modernMenu || label && nativeViewMode(String(label.textContent).trim())) {
                 row.dataset.ecfNativeView = 'true';
                 row.dataset.ecfNativeViewMode = modernMenu ? (index === 0 ? 'grid' : 'list')
-                    : /^(Vista a Elenco|List View)$/i.test(String(label.textContent).trim()) ? 'list' : 'grid';
+                    : nativeViewMode(String(label.textContent).trim());
             }
         });
         if (modernMenu && state.menuRoot !== modernMenu) { watchLayoutMenu(modernMenu); }
@@ -1123,7 +1327,7 @@
         item.removeAttribute('data-ecf-native-view-mode');
         item.setAttribute('role', 'menuitemradio');
         item.setAttribute('tabindex', '0');
-        item.setAttribute('aria-label', 'Vista CoverFlow');
+        item.setAttribute('aria-label', 'CoverFlow');
         item.setAttribute('aria-checked', 'false');
 
         var label = item.querySelector(
@@ -1199,12 +1403,18 @@
         if (check) { check.style.visibility = active ? 'visible' : 'hidden'; }
     }
 
+    function nativeViewMode(label) {
+        if (['Vista Griglia', 'Grid View', nativeText('GridView')].includes(label)) { return 'grid'; }
+        if (['Vista a Elenco', 'List View', nativeText('ListView')].includes(label)) { return 'list'; }
+        return null;
+    }
+
     function findViewMenuItemsByText() {
         var viewLabels = [
             'Vista Griglia',
             'Vista a Elenco',
             'Grid View',
-            'List View'
+            'List View', nativeText('GridView'), nativeText('ListView')
         ];
         var rows = [];
 
@@ -1324,7 +1534,7 @@
         var heading = element('div', 'ecf-heading');
         state.heading = heading;
         state.title = element('h2', null, 'CoverFlow');
-        state.subtitle = element('p', null, 'Caricamento…');
+        state.subtitle = translatedElement('p', null, 'loading');
         heading.append(state.title, state.subtitle);
 
         state.stage = element('div', 'ecf-stage');
@@ -1337,22 +1547,24 @@
         var controls = element('div', 'ecf-controls');
         var previous = element('button', 'ecf-icon-button', '‹');
         previous.type = 'button';
-        previous.setAttribute('aria-label', 'Elemento precedente; tieni premuto per scorrere velocemente');
+        translated(previous, 'previous', [], 'aria-label');
+        translated(previous, 'previous', [], 'title');
         bindArrowHold(previous, -1);
         state.backButton = element('button', 'ecf-icon-button ecf-level-up', '↩');
         state.backButton.type = 'button';
-        state.backButton.title = 'Torna al livello superiore';
-        state.backButton.setAttribute('aria-label', 'Torna al livello superiore');
+        translated(state.backButton, 'back', [], 'title');
+        translated(state.backButton, 'back', [], 'aria-label');
         state.backButton.hidden = true;
         state.backButton.addEventListener('click', showSeries);
         var next = element('button', 'ecf-icon-button', '›');
         next.type = 'button';
-        next.setAttribute('aria-label', 'Elemento successivo; tieni premuto per scorrere velocemente');
+        translated(next, 'next', [], 'aria-label');
+        translated(next, 'next', [], 'title');
         bindArrowHold(next, 1);
         state.keyboardButton = element('button', 'ecf-icon-button');
         state.keyboardButton.type = 'button';
-        state.keyboardButton.title = 'Cerca per iniziali';
-        state.keyboardButton.setAttribute('aria-label', 'Mostra tastiera per cercare per iniziali');
+        translated(state.keyboardButton, 'initials', [], 'title');
+        translated(state.keyboardButton, 'keyboard', [], 'aria-label');
         state.keyboardButton.setAttribute('aria-expanded', 'false');
         state.keyboardButton.setAttribute('aria-controls', 'ecf-prefix-search');
         state.keyboardButton.appendChild(createKeyboardIcon());
@@ -1370,8 +1582,8 @@
         state.searchInput.autocomplete = 'off';
         state.searchInput.setAttribute('autocapitalize', 'none');
         state.searchInput.spellcheck = false;
-        state.searchInput.placeholder = 'Titolo: scrivi le iniziali…';
-        state.searchInput.setAttribute('aria-label', 'Vai al titolo che inizia con');
+        translated(state.searchInput, 'prefix', [], 'placeholder');
+        translated(state.searchInput, 'initials', [], 'aria-label');
         state.searchInput.addEventListener('input', function searchFromKeyboard() {
             window.clearTimeout(state.typeaheadTimer);
             state.typeaheadBuffer = state.searchInput.value;
@@ -1387,11 +1599,11 @@
         footer.append(state.searchPanel, controls, state.status);
 
         state.alphabet = element('nav', 'ecf-alphabet');
-        state.alphabet.setAttribute('aria-label', 'Vai a una iniziale');
+        translated(state.alphabet, 'alphabet', [], 'aria-label');
         '#ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').forEach(function addInitial(letter) {
             var button = element('button', null, letter);
             button.type = 'button';
-            button.setAttribute('aria-label', letter === '#' ? 'Numeri e simboli' : 'Vai alla iniziale ' + letter);
+            translated(button, letter === '#' ? 'symbols' : 'letter', [letter], 'aria-label');
             button.setAttribute('aria-pressed', 'false');
             button.addEventListener('click', function jumpToLetter() { selectInitial(letter); });
             state.alphabetButtons[letter] = button;
@@ -1548,12 +1760,12 @@
             if (explicitAnchorId && (!state.entries[state.index]
                 || normalizeItemId(state.entries[state.index].Id) !== normalizeItemId(explicitAnchorId))) {
                 state.stage.classList.add('is-locating');
-                state.title.textContent = 'Recupero della selezione…';
-                setStatus('Recupero dell’elemento corrente…', false);
+                translated(state.title, 'restore');
+                setStatus('restore', false);
             } else { renderPosition(); }
         } else {
-            setStatus('Caricamento della biblioteca…', false);
-            state.subtitle.textContent = 'Caricamento…';
+            setStatus('loading', false);
+            translated(state.subtitle, 'loading');
         }
 
         var generation = ++state.loadGeneration;
@@ -1619,10 +1831,10 @@
             state.reordering = false;
             state.stage.classList.remove('is-locating');
             if (anchorId) {
-                setStatus('Riordinamento non completato: mantenuta la selezione precedente. Riprova cambiando ordine.', true);
+                setStatus('sortError', true);
             } else {
-                state.subtitle.textContent = 'Impossibile caricare la biblioteca';
-                setStatus('Errore durante la lettura della biblioteca Jellyfin.', true);
+                translated(state.subtitle, 'error');
+                setStatus('error', true);
             }
         }
     }
@@ -1724,12 +1936,12 @@
     }
 
     function getLoadingSuffix() {
-        if (state.pendingInitial) { return ' · ricerca iniziale “' + state.pendingInitial + '”…'; }
-        if (state.reordering) { return ' · riordino…'; }
+        if (state.pendingInitial) { return ' · ' + t('search') + ' “' + state.pendingInitial + '”…'; }
+        if (state.reordering) { return ' · ' + t('loading'); }
         if (state.loadingComplete || state.loadingTotal <= state.loadingLoaded) {
             return '';
         }
-        return ' · caricamento ' + state.loadingLoaded + '/' + state.loadingTotal;
+        return ' · ' + t('loading') + ' ' + state.loadingLoaded + '/' + state.loadingTotal;
     }
 
     function normalizeLookupText(value) {
@@ -1945,14 +2157,15 @@
 
         if (state.entries.length === 0) {
             previousCards.forEach(function removeEmptyCard(card) { card.remove(); });
+            pruneTranslations();
             state.visibleCards = [];
             state.activeStart = 0;
             state.activeEnd = -1;
+            clearTextTranslation(state.title);
             state.title.textContent = (state.libraryViews[state.activeLibraryId] || {}).Name || 'CoverFlow';
-            state.subtitle.textContent = state.loadingComplete ? 'Nessun elemento trovato' : 'Caricamento…';
+            translated(state.subtitle, state.loadingComplete ? 'noItems' : 'loading');
             state.backButton.hidden = state.folderStack.length === 0;
-            setStatus(state.loadingComplete ? 'La biblioteca corrente non contiene elementi compatibili.'
-                : 'Caricamento della biblioteca…', false);
+            setStatus(state.loadingComplete ? 'noItems' : 'loading', false);
             return;
         }
 
@@ -1964,7 +2177,7 @@
                 retained.dataset.index = String(index);
                 var badge = retained.querySelector('.ecf-kind-badge');
                 if (badge && entry.kind === 'series') {
-                    badge.textContent = 'SERIE · ' + entry.books.length;
+                    translated(badge, 'seriesBadge', [entry.books.length]);
                 }
                 state.cards.push(retained);
                 return;
@@ -1975,13 +2188,12 @@
             card.dataset.entryKey = entryKey;
             card.classList.add(isGroup ? 'is-group' : 'is-item');
             card.classList.toggle('is-album', entry.Type === 'MusicAlbum');
-            card.setAttribute('aria-label', isGroup
-                ? entry.name || entry.Name || 'Cartella'
-                : entry.Name || 'Elemento');
+            if (getEntryTitle(entry)) { card.setAttribute('aria-label', getEntryTitle(entry)); }
+            else { translated(card, isGroup ? 'folder' : 'items', [], 'aria-label'); }
             var flipper = element('div', 'ecf-flipper');
             var front = element('button', 'ecf-front');
             front.type = 'button';
-            front.setAttribute('aria-label', 'Mostra contenuto: ' + (getEntryTitle(entry) || 'Elemento'));
+            translated(front, 'showContent', [getEntryTitle(entry)], 'aria-label');
             front.addEventListener('click', function selectCard() {
                 if (Date.now() < state.suppressClickUntil) {
                     return;
@@ -2004,8 +2216,8 @@
             surface.appendChild(element('span', 'ecf-card-placeholder', entry.Type === 'MusicAlbum' ? '♫' : '▤'));
             front.appendChild(surface);
             if (isGroup) {
-                front.appendChild(element('span', 'ecf-kind-badge', entry.kind === 'series'
-                    ? 'SERIE · ' + entry.books.length : 'CARTELLA'));
+                front.appendChild(translatedElement('span', 'ecf-kind-badge', entry.kind === 'series'
+                    ? 'seriesBadge' : 'folder', entry.kind === 'series' ? [entry.books.length] : []));
             } else if (entry.IndexNumber !== null && entry.IndexNumber !== undefined) {
                 front.appendChild(element('span', 'ecf-item-index', '#' + entry.IndexNumber));
             }
@@ -2017,6 +2229,7 @@
         });
 
         previousCards.forEach(function removeOldCard(card) { card.remove(); });
+        pruneTranslations();
 
         renderPosition();
     }
@@ -2086,10 +2299,12 @@
         }
         state.lastInfoIndex = state.index;
 
+        updatePositionText();
+    }
+
+    function updatePositionText() {
         var current = state.entries[state.index];
-        if (!current) {
-            return;
-        }
+        if (!current) { return; }
         rememberFlowSelection();
         var initial = getEntryInitial(current);
         if (initial !== state.alphabetActive && state.alphabet) {
@@ -2102,27 +2317,25 @@
             var currentTitle = getEntryTitle(current) || '';
             var prefixFound = !state.typeaheadBuffer || normalizeLookupText(currentTitle)
                 .startsWith(normalizeLookupText(state.typeaheadBuffer));
-            state.searchResult.textContent = prefixFound ? currentTitle : state.loadingComplete
-                ? 'Nessun titolo con queste iniziali'
-                : 'Ricerca nei titoli ancora in caricamento…';
+            if (prefixFound) { clearTextTranslation(state.searchResult); state.searchResult.textContent = currentTitle; }
+            else { translated(state.searchResult, state.loadingComplete ? 'noPrefix' : 'searching'); }
         }
         if (state.mode === 'series') {
-            state.title.textContent = current.name;
-            state.subtitle.textContent = current.books.length + (current.books.length === 1 ? ' volume' : ' volumi');
-            setStatus((state.index + 1) + ' di ' + state.entries.length + ' serie · tocca per entrare'
-                + getLoadingSuffix() + (state.typeaheadBuffer ? ' · cerca “' + state.typeaheadBuffer + '”' : ''), false);
+            clearTextTranslation(state.title); state.title.textContent = current.name;
+            translated(state.subtitle, 'itemCount', [current.books.length]);
+            setStatus('catalogStatus', false, state.index + 1, state.entries.length, 'series');
             state.backButton.hidden = true;
         } else if (state.mode === 'volumes') {
-            state.title.textContent = current.Name || 'Senza titolo';
-            state.subtitle.textContent = getBookSubtitle(current);
-            setStatus((state.index + 1) + ' di ' + state.entries.length + ' volumi · usa frecce, rotella o swipe'
-                + getLoadingSuffix() + (state.typeaheadBuffer ? ' · cerca “' + state.typeaheadBuffer + '”' : ''), false);
+            if (current.Name) { clearTextTranslation(state.title); state.title.textContent = current.Name; }
+            else { translated(state.title, 'untitled'); }
+            translated(state.subtitle, 'bookSubtitle', [current]);
+            setStatus('catalogStatus', false, state.index + 1, state.entries.length, 'book');
             state.backButton.hidden = false;
         } else {
-            state.title.textContent = current.Name || 'Senza titolo';
-            state.subtitle.textContent = getItemSubtitle(current);
-            setStatus((state.index + 1) + ' di ' + state.entries.length + ' elementi · tocca per girare'
-                + getLoadingSuffix() + (state.typeaheadBuffer ? ' · cerca “' + state.typeaheadBuffer + '”' : ''), false);
+            if (current.Name) { clearTextTranslation(state.title); state.title.textContent = current.Name; }
+            else { translated(state.title, 'untitled'); }
+            translated(state.subtitle, 'itemSubtitle', [current]);
+            setStatus('catalogStatus', false, state.index + 1, state.entries.length, 'items');
             state.backButton.hidden = state.folderStack.length === 0;
         }
     }
@@ -2239,7 +2452,7 @@
         if (authors.length > 0) {
             return authors.join(', ');
         }
-        return book.SeriesName || 'Biblioteca Jellyfin';
+        return book.SeriesName || t('library');
     }
 
     function getItemSubtitle(item) {
@@ -2247,12 +2460,12 @@
             return [getAlbumArtist(item), item.ProductionYear].filter(Boolean).join(' · ');
         }
         if (isLibraryFolder(item)) {
-            return 'Cartella · tocca per vedere il contenuto';
+            return t('folder');
         }
         if (item.ProductionYear) {
             return String(item.ProductionYear);
         }
-        return item.Type === 'Series' ? 'Serie TV' : 'Biblioteca Jellyfin';
+        return t(item.Type === 'Series' ? 'series' : 'library');
     }
 
     /****************************************************************
@@ -2323,7 +2536,7 @@
         if (back) {
             back.inert = true;
             window.setTimeout(function removeClosedBack() {
-                if (state.detailCard !== card) { back.remove(); }
+                if (state.detailCard !== card) { back.remove(); pruneTranslations(); }
             }, 550);
         }
         if (restoreFocus && front) { front.focus({ preventScroll: true }); }
@@ -2377,14 +2590,14 @@
         var parts = [];
         if (data.kind === 'tracks') {
             parts = [getAlbumArtist(item), item.ProductionYear,
-                data.total + (data.total === 1 ? ' traccia' : ' tracce')];
+                t(data.total === 1 ? 'oneTrack' : 'trackCount', data.total)];
             var duration = item.RunTimeTicks || (data.items.length === data.total
                 ? data.items.reduce(function sumTracks(sum, track) { return sum + Number(track.RunTimeTicks || 0); }, 0) : 0);
-            if (duration) { parts.push(Math.round(duration / 600000000) + ' min'); }
+            if (duration) { parts.push(t('minutes', Math.round(duration / 600000000))); }
         } else if (data.kind === 'episodes') {
-            parts = [item.ProductionYear, data.total + ' episodi'];
+            parts = [item.ProductionYear, t(data.total === 1 ? 'oneEpisode' : 'episodeCount', data.total)];
         } else if (data.kind === 'folder' || data.kind === 'volumes') {
-            parts = [data.total + ' elementi' + (data.complete === false ? ' · caricamento catalogo…' : '')];
+            parts = [t('itemCount', data.total) + (data.complete === false ? ' · ' + t('loading') : '')];
         } else {
             parts = [item.Type === 'Book' ? getBookSubtitle(item) : '', item.ProductionYear];
         }
@@ -2392,7 +2605,15 @@
     }
 
     function addDetailAction(parent, label, action) {
-        var button = element('button', 'ecf-detail-action', label);
+        var button = element('button', 'ecf-detail-action');
+        if (label === 'browseFlow' || label === 'openNative') {
+            button.classList.add('ecf-icon-button');
+            translated(button, label, [], 'title');
+            translated(button, label, [], 'aria-label');
+            var icon = element('span', null, label === 'browseFlow' ? '▤' : '↗');
+            icon.setAttribute('aria-hidden', 'true');
+            button.appendChild(icon);
+        } else { translated(button, label); }
         button.type = 'button';
         button.addEventListener('click', action);
         parent.appendChild(button);
@@ -2404,10 +2625,10 @@
         var body = back.querySelector('.ecf-back-body');
         var savedScroll = body.scrollTop;
         body.replaceChildren();
-        back.querySelector('.ecf-back-meta').textContent = detailMetadata(data);
+        translated(back.querySelector('.ecf-back-meta'), 'detailMetadata', [data]);
         if (data.kind === 'plot') {
-            body.appendChild(element('p', 'ecf-plot', overviewText(data.item.Overview)
-                || 'Nessuna trama disponibile nei metadati Jellyfin.'));
+            var plot = overviewText(data.item.Overview);
+            body.appendChild(plot ? element('p', 'ecf-plot', plot) : translatedElement('p', 'ecf-plot', 'noPlot'));
         } else {
             var previousSection = null;
             data.items.forEach(function addContentRow(item) {
@@ -2415,9 +2636,10 @@
                     ? 0 : item.ParentIndexNumber;
                 if (data.kind === 'episodes' || data.kind === 'tracks') {
                     if (sectionNumber !== previousSection) {
-                        body.appendChild(element('h4', 'ecf-detail-section', data.kind === 'episodes'
-                            ? sectionNumber === 0 ? 'Speciali' : 'Stagione ' + sectionNumber
-                            : 'Disco ' + (sectionNumber || 1)));
+                        body.appendChild(data.kind === 'episodes' && sectionNumber === 0
+                            ? translatedElement('h4', 'ecf-detail-section', 'specials')
+                            : translatedElement('h4', 'ecf-detail-section', 'sectionNumber',
+                                [data.kind === 'episodes' ? 'season' : 'disc', sectionNumber || 1]));
                         previousSection = sectionNumber;
                     }
                 }
@@ -2425,7 +2647,8 @@
                 row.type = 'button';
                 row.appendChild(element('span', 'ecf-detail-number', isLibraryFolder(item) ? '▤'
                     : item.IndexNumber === undefined || item.IndexNumber === null ? '·' : String(item.IndexNumber)));
-                row.appendChild(element('span', 'ecf-detail-name', item.Name || 'Senza titolo'));
+                row.appendChild(item.Name ? element('span', 'ecf-detail-name', item.Name)
+                    : translatedElement('span', 'ecf-detail-name', 'untitled'));
                 row.appendChild(element('span', 'ecf-detail-duration', isLibraryFolder(item) ? '›' : formatDuration(item.RunTimeTicks)));
                 row.addEventListener('click', function openContentRow() {
                     if (isLibraryFolder(item)) { browseFolder(item); } else { openItemDetails(item); }
@@ -2433,12 +2656,12 @@
                 body.appendChild(row);
             });
             if (!data.items.length) {
-                body.appendChild(element('p', 'ecf-detail-note', 'Nessun contenuto disponibile.'));
+                body.appendChild(translatedElement('p', 'ecf-detail-note', 'noContent'));
             }
             if (data.kind !== 'volumes' && data.items.length < data.total) {
-                var more = addDetailAction(body, 'Carica altri (' + data.items.length + '/' + data.total + ')', async function moreContent() {
+                var more = addDetailAction(body, 'moreCount', async function moreContent() {
                     more.disabled = true;
-                    more.textContent = 'Caricamento…';
+                    translated(more, 'loading');
                     try {
                         var page = await fetchDetailPage(entry, data.items.length);
                         if (generation !== state.detailGeneration) { return; }
@@ -2450,10 +2673,11 @@
                     } catch (error) {
                         if (generation === state.detailGeneration) {
                             more.disabled = false;
-                            more.textContent = 'Caricamento non riuscito. Riprova';
+                            translated(more, 'retry');
                         }
                     }
                 });
+                translated(more, 'moreCount', [data.items.length, data.total]);
             }
         }
         body.scrollTop = savedScroll;
@@ -2470,33 +2694,34 @@
         var kind = detailKind(entry);
         var flipper = card.querySelector('.ecf-flipper');
         var oldBack = card.querySelector('.ecf-back');
-        if (oldBack) { oldBack.remove(); }
+        if (oldBack) { oldBack.remove(); pruneTranslations(); }
         var back = element('section', 'ecf-back');
         // Size only the back plane, leaving cover geometry untouched throughout the flip.
         back.style.setProperty('--ecf-back-height', Math.max(180, Math.min(480, state.stage.clientHeight - 60)) + 'px');
-        back.setAttribute('aria-label', 'Contenuto di ' + (getEntryTitle(entry) || 'Elemento'));
+        translated(back, 'contentOf', [getEntryTitle(entry)], 'aria-label');
         var header = element('div', 'ecf-back-header');
-        var labels = { tracks: 'Album · tracce', episodes: 'Serie TV · episodi', folder: 'Cartella · contenuto',
-            volumes: 'Serie · volumi', plot: entry.Type === 'Book' ? 'Libro · trama' : 'Trama' };
-        header.append(element('p', 'ecf-back-kicker', labels[kind]),
-            element('h3', 'ecf-back-title', getEntryTitle(entry) || 'Senza titolo'),
-            element('p', 'ecf-back-meta', 'Caricamento…'));
+        var labels = { tracks: 'songs', episodes: 'episodes', folder: 'folder', volumes: 'book', plot: 'overview' };
+        header.append(translatedElement('p', 'ecf-back-kicker', labels[kind]),
+            getEntryTitle(entry) ? element('h3', 'ecf-back-title', getEntryTitle(entry))
+                : translatedElement('h3', 'ecf-back-title', 'untitled'),
+            translatedElement('p', 'ecf-back-meta', 'loading'));
         var close = element('button', 'ecf-icon-button ecf-flip-close', '↶');
         close.type = 'button';
-        close.setAttribute('aria-label', 'Torna alla copertina');
+        translated(close, 'cover', [], 'aria-label');
+        translated(close, 'cover', [], 'title');
         close.addEventListener('click', function turnFront() { closeDetails(true); });
         header.appendChild(close);
         var body = element('div', 'ecf-back-body');
         body.setAttribute('tabindex', '0');
-        body.setAttribute('aria-label', 'Contenuto scorrevole');
-        body.appendChild(element('p', 'ecf-detail-note', 'Caricamento…'));
+        translated(body, 'scrollContent', [], 'aria-label');
+        body.appendChild(translatedElement('p', 'ecf-detail-note', 'loading'));
         var footer = element('div', 'ecf-back-footer');
         if (kind === 'folder') {
-            addDetailAction(footer, 'Sfoglia in CoverFlow →', function browseCurrentFolder() { browseFolder(entry); });
+            addDetailAction(footer, 'browseFlow', function browseCurrentFolder() { browseFolder(entry); });
         } else if (kind === 'volumes') {
-            addDetailAction(footer, 'Sfoglia i volumi →', function browseSeriesVolumes() { closeDetails(); openSeries(); });
+            addDetailAction(footer, 'browseFlow', function browseSeriesVolumes() { closeDetails(); openSeries(); });
         } else {
-            addDetailAction(footer, 'Apri in Jellyfin ↗', function openNativeDetails() { openItemDetails(entry); });
+            addDetailAction(footer, 'openNative', function openNativeDetails() { openItemDetails(entry); });
         }
         back.append(header, body, footer);
         flipper.appendChild(back);
@@ -2532,8 +2757,8 @@
             paintDetails(back, data, entry, generation);
         } catch (error) {
             if (generation !== state.detailGeneration) { return; }
-            body.replaceChildren(element('p', 'ecf-detail-note', 'Impossibile caricare il contenuto.'));
-            addDetailAction(body, 'Riprova', function retryDetails() { closeDetails(); flipCurrent(entry, card); });
+            body.replaceChildren(translatedElement('p', 'ecf-detail-note', 'error'));
+            addDetailAction(body, 'retry', function retryDetails() { closeDetails(); flipCurrent(entry, card); });
         }
     }
 
@@ -2797,6 +3022,7 @@
     /****************************************************************
      *  BLOCK 09 - STARTUP
      ****************************************************************/
+    installLanguageTracking();
     installStyles();
     ensureLauncher();
     waitForApi();

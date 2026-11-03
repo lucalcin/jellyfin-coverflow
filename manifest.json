@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/lucalcin/jellyfin-coverflow/main/artwork/coverflow.png",
     "versions": [
       {
+        "version": "0.4.7.0",
+        "changelog": "Follows Jellyfin interface language using native translations and live updates. Localizes common labels, counts, accessibility and menu matching; adds action icons with translated tooltips. CoverFlow-specific messages have Italian/English fallbacks.",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/lucalcin/jellyfin-coverflow/releases/download/v0.4.7/CoverFlow_0.4.7_Jellyfin12.zip",
+        "checksum": "7B1DE1D0243B01896043104441F90F44",
+        "timestamp": "2026-11-03T21:45:00Z"
+      },
+      {
         "version": "0.4.6.0",
         "changelog": "Adds an A-Z/# CoverFlow index and shared current-item anchors across Grid, List and CoverFlow, including native page recovery within the same library/folder. Preserves sorting and unrelated filters.",
         "targetAbi": "12.0.0.0",

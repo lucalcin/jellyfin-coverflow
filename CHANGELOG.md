@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.7 — 2026-11-03
+
+- Follow Jellyfin's interface language and reuse its loaded globalize dictionaries
+  for common labels, sections, counters, native menu matching and accessibility.
+- Update labels after native language changes and asynchronous dictionary loading
+  without replacing covers, changing selection or resetting detail focus/scroll.
+- Keep Italian/English local fallbacks for CoverFlow-specific messages; use English
+  for missing translations. Titles and metadata retain their original language.
+- Discover the optional native translation module without fixed bundle IDs; use
+  local fallbacks when the frontend bridge is unavailable or ambiguous.
+- Replace browse/open detail actions with icons and translated accessible tooltips.
+- Add locale-switch, fallback and native-dictionary regression checks, including
+  an optional check using the installed Jellyfin 12.4 globalize factory.
+
 ## 0.4.6 — 2026-11-03
 
 - Add an A-Z/# side index to CoverFlow, with normalized accents, SortName-based

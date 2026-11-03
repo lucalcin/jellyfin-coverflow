@@ -39,6 +39,9 @@ official Jellyfin plugin and does not add this interface to native TV clients.
   its native page and highlighting it when necessary.
 - **Progressive loading.** Show an initial catalog page, then load more in the
   background. Existing visible cover nodes are reused rather than recreated.
+- **Jellyfin interface language.** Reuse native translations for common labels,
+  counts, menus and accessibility. Language changes update labels in place;
+  CoverFlow-specific messages use Italian/English local fallbacks.
 - **Optional group posters.** Add `coverflow-series.png` or `coverflow-series.jpg`
   inside a comic/book folder; otherwise CoverFlow can use a descendant volume's
   cover. PNG takes precedence when both are present.
@@ -54,7 +57,7 @@ your collection or rewrite media files, metadata or the Jellyfin database.
 | JavaScript Injector | Required; the 4.x / Jellyfin 12-compatible build |
 | Client | Jellyfin Web in a browser; other web-based clients are not guaranteed |
 | Native TV / mobile clients | Not supported unless they actually load the compatible Web frontend |
-| Interface language | Currently Italian; localization is not implemented yet |
+| Interface language | Follows Jellyfin; reuses its native dictionaries. CoverFlow-specific messages support Italian and English (English fallback for other languages). |
 
 Current user testing reports good results with movies, TV series, music and
 comics. Ebooks still need validation. Personal photos and videos are experimental
@@ -66,6 +69,9 @@ Jellyfin Web or manually edit its installed files.
 
 The interface integrates with Web components and DOM structure rather than a
 stable official view-extension API. Future Web updates can require adaptation.
+The optional translation bridge recognizes the loaded native globalize module;
+unrecognized frontend builds retain local Italian/English fallbacks. Media
+titles and metadata keep the language already supplied by your library.
 Jellyfin 10.x is not supported by this release.
 
 ## Install
@@ -101,13 +107,13 @@ on access to the maintainer's home media server.
 
 ### Manual alternative
 
-Download `CoverFlow_0.4.6_Jellyfin12.zip` from
-[Releases](https://github.com/lucalcin/jellyfin-coverflow/releases/tag/v0.4.6).
+Download `CoverFlow_0.4.7_Jellyfin12.zip` from
+[Releases](https://github.com/lucalcin/jellyfin-coverflow/releases/tag/v0.4.7).
 Stop Jellyfin and extract its three files into a dedicated plugin-version
-directory such as `CoverFlow_0.4.6.0` under **your installation's plugin directory**:
+directory such as `CoverFlow_0.4.7.0` under **your installation's plugin directory**:
 
 ```text
-CoverFlow_0.4.6.0/
+CoverFlow_0.4.7.0/
   Jellyfin.Plugin.CoverFlow.dll
   meta.json
   coverflow.png

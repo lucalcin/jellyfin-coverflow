@@ -55,6 +55,7 @@ function runtime(storage = new Map()) {
             get length() { return storage.size; }, key: index => [...storage.keys()][index] },
     };
     const document = { createElement: tag => new Node(tag), getElementById: () => null,
+        documentElement: { getAttribute: name => name === 'lang' ? 'it' : null },
         body: { style: {} }, removeEventListener() {}, addEventListener() {} };
     const source = fs.readFileSync(path.join(__dirname, '../Jellyfin.Plugin.CoverFlow/Web/coverflow.js'), 'utf8')
         .replace('    installStyles();\n    ensureLauncher();\n    waitForApi();', `
@@ -64,7 +65,9 @@ function runtime(storage = new Map()) {
                 readNativeSortRequest, getCurrentSortSettings, getLibraryView, setLibraryView,
                 syncLibraryView, maybeAutoOpenRememberedLibrary, onNativeSortStorage, readNativeStoredSort,
                 selectInitial, applyPendingInitial, getEntryInitial, rememberFlowSelection, getSelectionScope,
-                findNativeItemPage, getNativeSettingsKey, readNativePageSettings, nativeSelectionSignature, openCoverFlow };
+                findNativeItemPage, getNativeSettingsKey, readNativePageSettings, nativeSelectionSignature, openCoverFlow,
+                language, messages, t, translated, syncLanguage, refreshTranslations, connectNativeTranslations,
+                getSortFieldForLabel, nativeViewMode, setStatus };
         `);
     vm.runInNewContext(source, { window, document, console, Date, URL, URLSearchParams, DOMParser: class {
         parseFromString() { return { body: { textContent: 'Safe plot text' }, querySelectorAll: () => [] }; }
@@ -76,7 +79,7 @@ function runtime(storage = new Map()) {
         activeLibraryId: 'library', activeCollectionType: 'music',
         api: { getCurrentUserId: () => 'user' },
     });
-    return { ...api, window, flush() { const pending = timers.splice(0); pending.forEach(fn => fn()); } };
+    return { ...api, window, document, flush() { const pending = timers.splice(0); pending.forEach(fn => fn()); } };
 }
 
 function addEntry(r, entry) {
@@ -84,6 +87,106 @@ function addEntry(r, entry) {
     r.renderBooks();
     return r.state.cards[0];
 }
+
+function nativeTranslations(r, locale = 'en-us') {
+    const dictionaries = {
+        'en-us': { HeaderTracks: 'Tracks', LabelFolder: 'Folder', Overview: 'Overview', Season: 'Season',
+            OptionSpecialEpisode: 'Specials', ValueOneSong: '1 song', ValueSongCount: '{0} songs',
+            ValueMinutes: '{0} min', ItemCount: '{0} items', Items: 'Items',
+            AlbumArtist: 'Album Artist', GridView: 'Grid View', ListView: 'List View' },
+        de: { HeaderTracks: 'Titel', LabelFolder: 'Ordner', Overview: 'Übersicht', Season: 'Staffel',
+            OptionSpecialEpisode: 'Extras', ValueOneSong: '1 Lied', ValueSongCount: '{0} Lieder',
+            ValueMinutes: '{0} Min.', ItemCount: '{0} Einträge', Items: 'Einträge',
+            AlbumArtist: 'Albuminterpret', GridView: 'Rasteransicht', ListView: 'Listenansicht' },
+    };
+    let current = locale;
+    const native = {
+        getCurrentLocale: () => current,
+        translate(key, ...args) {
+            let text = dictionaries[current]?.[key] || dictionaries['en-us'][key] || key;
+            args.forEach((arg, index) => { text = text.replaceAll('{' + index + '}', arg.toLocaleString(current)); });
+            return text;
+        },
+        loadStrings: async () => {},
+    };
+    r.document.documentElement.getAttribute = key => key === 'lang' ? current : null;
+    r.language.native = native;
+    r.language.ready = true;
+    r.syncLanguage();
+    return { native, dictionaries, change(value) { current = value; r.syncLanguage(); } };
+}
+
+test('native translations and singular counts update an open back without replacing cards or losing scroll', async () => {
+    const r = runtime(); const translations = nativeTranslations(r);
+    const card = addEntry(r, { Id: 'album', Name: 'Original title', Type: 'MusicAlbum' });
+    r.state.api.getItems = async () => ({ Items: [{ Id: 'track', Name: 'Original track', IndexNumber: 1 }], TotalRecordCount: 1 });
+    await r.flipCurrent(r.state.entries[0], card);
+    const back = card.querySelector('.ecf-back'); const body = back.querySelector('.ecf-back-body');
+    const row = body.querySelector('.ecf-detail-row'); body.scrollTop = 91; row.focus();
+    assert.equal(back.querySelector('.ecf-back-kicker').textContent, 'Tracks');
+    assert.match(back.querySelector('.ecf-back-meta').textContent, /1 song/);
+    translations.change('de');
+    assert.equal(back.querySelector('.ecf-back-kicker').textContent, 'Titel');
+    assert.match(back.querySelector('.ecf-back-meta').textContent, /1 Lied/);
+    assert.equal(r.state.cards[0], card); assert.equal(r.state.detailCard, card);
+    assert.equal(body.querySelector('.ecf-detail-row'), row); assert.equal(row.focused, true);
+    assert.equal(body.scrollTop, 91); assert.equal(r.state.title.textContent, 'Original title');
+    assert.equal(row.querySelector('.ecf-detail-name').textContent, 'Original track');
+});
+
+test('Jellyfin translated labels also identify sort fields and legacy native view rows', () => {
+    const r = runtime(); nativeTranslations(r, 'de');
+    assert.equal(r.getSortFieldForLabel('Albuminterpret'), 'AlbumArtist,SortName');
+    assert.equal(r.nativeViewMode('Rasteransicht'), 'grid');
+    assert.equal(r.nativeViewMode('Listenansicht'), 'list');
+});
+
+test('locale fallback never displays an internal key and missing native translations remain usable', () => {
+    const r = runtime(); const translations = nativeTranslations(r, 'xx');
+    assert.equal(r.t('songs'), 'Tracks');
+    assert.equal(r.t('toggle'), 'Toggle CoverFlow');
+    r.language.native = null; r.syncLanguage();
+    assert.equal(r.t('season'), 'Season');
+    translations.change('it');
+    assert.equal(r.t('toggle'), 'Attiva o disattiva CoverFlow');
+});
+
+test('locale refresh preserves transient errors and discards detached translated nodes', () => {
+    const r = runtime(); const translations = nativeTranslations(r);
+    addEntry(r, { Id: 'item', Name: 'Title' }); r.setStatus('sortError', true);
+    const detached = new Node(); Object.defineProperty(detached, 'isConnected', { value: false });
+    r.translated(detached, 'songs'); translations.change('it');
+    assert.match(r.state.status.textContent, /Riordinamento non completato/);
+    assert.equal(r.state.status.classList.contains('is-error'), true);
+    assert.equal(r.language.nodes.has(detached), false);
+});
+
+test('the optional webpack bridge discovers only the native translator without fixed module IDs', () => {
+    const r = runtime(); const { native } = nativeTranslations(r);
+    r.language.native = null; r.language.nextAttempt = 0;
+    const requested = [];
+    const requireNative = id => { requested.push(id); return { renamedExport: native }; };
+    requireNative.m = {
+        78123: function nativeFactory() { return 'Translation dictionary is empty. getCurrentLocale'; },
+        99871: function unrelatedFactory() { throw new Error('must not execute unrelated module'); },
+    };
+    r.window.webpackChunk = [];
+    r.window.webpackChunk.push = packet => packet[2](requireNative);
+    r.connectNativeTranslations();
+    assert.equal(r.language.native, native); assert.deepEqual(requested, ['78123']);
+});
+
+test('a changed or ambiguous native bundle leaves the fallback active', () => {
+    const r = runtime(); r.language.nextAttempt = 0;
+    let executed = false;
+    const requireNative = () => { executed = true; throw new Error('ambiguous factory must not run'); };
+    const factory = function ambiguous() { return 'Translation dictionary is empty. getCurrentLocale'; };
+    requireNative.m = { 1: factory, 2: factory };
+    r.window.webpackChunk = []; r.window.webpackChunk.push = packet => packet[2](requireNative);
+    r.connectNativeTranslations();
+    assert.equal(executed, false); assert.equal(r.language.native, null);
+    assert.equal(r.t('retry'), 'Riprova');
+});
 
 test('the alphabet jumps by SortName, normalizes accents, handles # and keeps the catalog intact', () => {
     const r = runtime();
@@ -281,7 +384,7 @@ test('sorting keeps the exact album and its existing card while scanning later p
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(r.state.entries[r.state.index].Id, 'swan');
     assert.equal(r.state.cards[r.state.index], card);
-    assert.match(r.state.status.textContent, /riordino/);
+    assert.match(r.state.status.textContent, /Caricamento/);
     release(); await loading;
     assert.equal(r.state.index, 620); assert.equal(r.state.entries[620].Id, 'swan');
     assert.equal(r.state.cards[620], card); assert.equal(r.state.reordering, false);
@@ -409,7 +512,7 @@ test('albums have square art and separate front/back controls without nested but
     assert.equal(card.classList.contains('is-flipped'), true);
     assert.equal(card.querySelector('.ecf-front').inert, true);
     assert.equal(card.querySelector('.ecf-detail-duration').textContent, '3:05');
-    assert.equal(card.querySelector('.ecf-back-meta').textContent, 'Artist · 2025 · 1 traccia · 3 min');
+    assert.equal(card.querySelector('.ecf-back-meta').textContent, 'Artist · 2025 · 1 brano · 3 min');
     assert.equal(card.querySelectorAll('button').every(button => button.querySelectorAll('button').length === 0), true);
 });
 
