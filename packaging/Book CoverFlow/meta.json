@@ -1,0 +1,16 @@
+{
+  "category": "General",
+  "changelog": "Fixes the native MUI View menu integration and follows Jellyfin sorting while preserving the selected item across pages, direction changes and comic-folder navigation.",
+  "description": "Adds an accessible CoverFlow browser to Jellyfin Web for existing media libraries. It uses Jellyfin metadata and images without modifying library data.",
+  "guid": "2f53b2eb-8f39-4472-a55f-cb715c942594",
+  "name": "CoverFlow",
+  "overview": "Browse Jellyfin libraries with a 3D CoverFlow interface.",
+  "owner": "Effecta",
+  "targetAbi": "12.0.0.0",
+  "timestamp": "2026-11-02T15:55:00.0000000Z",
+  "version": "0.4.3.0",
+  "status": "Active",
+  "autoUpdate": false,
+  "imagePath": "coverflow.png",
+  "assemblies": []
+}

@@ -1,0 +1,17 @@
+name: Feature request
+description: Suggest a focused improvement.
+title: "[Idea] "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What would this improve?
+      description: Explain the use case and affected library types or devices.
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested behavior
+    validations:
+      required: true

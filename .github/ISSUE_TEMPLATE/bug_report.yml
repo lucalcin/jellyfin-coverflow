@@ -1,0 +1,46 @@
+name: Bug report
+description: Report a reproducible CoverFlow problem.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not post passwords, tokens, API keys or private server addresses.
+        For vulnerabilities, use the private reporting channel in SECURITY.md.
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: CoverFlow, Jellyfin Server, Jellyfin Web and JavaScript Injector.
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device and browser
+      placeholder: "e.g. macOS / Safari, iPhone / Safari, Windows / Chrome"
+    validations:
+      required: true
+  - type: input
+    id: library
+    attributes:
+      label: Library type and approximate size
+      placeholder: "e.g. Music / 2,000 albums, Books / nested comic folders"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Optional screenshots or sanitized logs

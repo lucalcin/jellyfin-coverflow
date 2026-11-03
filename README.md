@@ -1,0 +1,197 @@
+# CoverFlow for Jellyfin
+
+**Rediscover your collection.**
+
+Browse albums, movies, TV series, books and comics in a perspective CoverFlow
+view. Turn a cover over to explore its content, without leaving your library.
+
+[![Preview](https://img.shields.io/badge/status-early_preview-blue)](https://github.com/lucalcin/jellyfin-coverflow/releases)
+[![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
+[![Checks](https://github.com/lucalcin/jellyfin-coverflow/actions/workflows/checks.yml/badge.svg)](https://github.com/lucalcin/jellyfin-coverflow/actions/workflows/checks.yml)
+
+![CoverFlow project artwork — illustrative, not an interface screenshot](artwork/coverflow.png)
+
+An independent, free and open-source extension for **Jellyfin Web**.
+**Early preview:** feedback and device testing are welcome. It is not an
+official Jellyfin plugin and does not add this interface to native TV clients.
+
+[Download the preview](https://github.com/lucalcin/jellyfin-coverflow/releases)
+· [Report a problem](https://github.com/lucalcin/jellyfin-coverflow/issues/new/choose)
+· [Support development](https://ko-fi.com/effecta)
+
+## What it does
+
+- **A new view, not a new server.** Open CoverFlow from the library toolbar or
+  the View menu; return to Grid or List at any time.
+- **Flip to explore.** Square music albums reveal tracks; TV series show episodes
+  grouped by season; books and movies show their descriptions.
+- **Real comic folders.** Browse folders and subfolders, then their individual
+  volumes. Existing folder structure is preserved, including duplicate names.
+- **Your library, your order.** Follow Jellyfin's sort criterion and direction
+  while keeping the same selected item. Each library remembers its view choice.
+- **Mouse, keyboard and touch.** Click side covers, use arrow keys, wheel or swipe;
+  hold an arrow to accelerate. A search field supports title-prefix navigation
+  and opens the keyboard on mobile.
+- **Progressive loading.** Show an initial catalog page, then load more in the
+  background. Existing visible cover nodes are reused rather than recreated.
+- **Optional group posters.** Add `coverflow-series.png` or `coverflow-series.jpg`
+  beside a comic/book folder; otherwise CoverFlow can use a descendant volume's
+  cover. PNG takes precedence when both are present.
+
+CoverFlow reads the existing catalog, metadata and images. It does not duplicate
+your collection or rewrite media files, metadata or the Jellyfin database.
+
+## Compatibility and requirements
+
+| Component | Current preview |
+| --- | --- |
+| Jellyfin Server / Web | Targets 12.x; technical validation performed against 12.4.0 |
+| JavaScript Injector | Required; the 4.x / Jellyfin 12-compatible build |
+| Client | Jellyfin Web in a browser; other web-based clients are not guaranteed |
+| Native TV / mobile clients | Not supported unless they actually load the compatible Web frontend |
+| Interface language | Currently Italian; localization is not implemented yet |
+
+JavaScript Injector is a separate community dependency. CoverFlow registers its
+script through that plugin; you do **not** need to paste JavaScript, fork
+Jellyfin Web or manually edit its installed files.
+
+The interface integrates with Web components and DOM structure rather than a
+stable official view-extension API. Future Web updates can require adaptation.
+Jellyfin 10.x is not supported by this release.
+
+## Install
+
+Back up your Jellyfin configuration before installing third-party plugins.
+
+### 1. Install JavaScript Injector
+
+Follow the upstream
+[JavaScript Injector installation instructions](https://github.com/n00bcodr/Jellyfin-JavaScript-Injector#-installation).
+Its plugin repository is:
+
+```text
+https://raw.githubusercontent.com/n00bcodr/jellyfin-plugins/main/manifest.json
+```
+
+Choose the build compatible with Jellyfin 12 and restart Jellyfin as instructed.
+
+### 2. Add the CoverFlow repository
+
+In **Dashboard → Plugins → Repositories**, add a repository named **CoverFlow**:
+
+```text
+https://raw.githubusercontent.com/lucalcin/jellyfin-coverflow/main/manifest.json
+```
+
+Open the plugin catalog, install **CoverFlow**, then restart Jellyfin. Reload
+Jellyfin Web in the browser after the server finishes starting.
+
+The manifest URL is a plugin-catalog feed, not a website or a Jellyfin login.
+Download URLs are versioned GitHub release assets; installation does not depend
+on access to the maintainer's home media server.
+
+### Manual alternative
+
+Download `CoverFlow_0.4.3_Jellyfin12.zip` from
+[Releases](https://github.com/lucalcin/jellyfin-coverflow/releases/tag/v0.4.3).
+Stop Jellyfin and extract its three files into a dedicated plugin-version
+directory such as `CoverFlow_0.4.3.0` under **your installation's plugin directory**:
+
+```text
+CoverFlow_0.4.3.0/
+  Jellyfin.Plugin.CoverFlow.dll
+  meta.json
+  coverflow.png
+```
+
+Do not leave multiple CoverFlow DLL versions active. Move the previous version
+outside the plugin directory so it can be restored, then start Jellyfin. The
+JavaScript Injector dependency is still required. Plugin-directory paths vary
+with the operating system and container configuration.
+
+## Use CoverFlow
+
+1. Open a library in Jellyfin Web and select **CoverFlow** in the View menu or
+   click its perspective-cover toolbar icon.
+2. Click a side cover to advance one position. Click the center cover to turn it
+   over and reveal its contents.
+3. Scroll the back independently. Use the curved arrow to return to the cover.
+   On a folder's back, choose **Sfoglia in CoverFlow** to enter it.
+4. Use the native Jellyfin sort menu to reorder both views. The selected item
+   remains selected even when its new position requires loading another page.
+5. Select Grid or List, or toggle the CoverFlow icon, to leave this view.
+
+The keyboard button opens a real title-search field. Enter hides the mobile
+keyboard; a second click closes the field. Escape closes the card back first,
+then goes up through folders or exits CoverFlow.
+
+Track and episode rows, and **Apri in Jellyfin**, open the usual detail pages.
+They do not automatically start playback. Album-artist sorting uses Jellyfin's
+`AlbumArtist` metadata, not a composer stored only in the People field.
+
+## Preview limitations
+
+- Perceived fluidity on real phones, Safari and large libraries still needs
+  community validation. Passing an automated test is not device UX acceptance.
+- Initial catalog loading uses 80 items followed by pages of up to 500. The
+  normal catalog window is 5,000 items, not full virtualized browsing. A reorder
+  may scan farther to preserve the selected item.
+- Card details load on demand in pages of 100; the metadata cache holds up to
+  eight cards per library.
+- Custom themes and Jellyfin Web changes may affect toolbar/menu integration.
+- Posters depend on the metadata and local files available to the server.
+
+If you find a problem, please include your plugin/Web/Server versions, device,
+browser, library type and approximate size in a
+[bug report](https://github.com/lucalcin/jellyfin-coverflow/issues/new/choose).
+Remove tokens, API keys, personal server addresses and private paths from any
+screenshots or logs. See [SECURITY.md](SECURITY.md) for sensitive reports.
+
+## Build and test
+
+Requires .NET SDK 10 and Node.js 22 or newer.
+
+```bash
+dotnet publish Jellyfin.Plugin.CoverFlow/Jellyfin.Plugin.CoverFlow.csproj \
+  --configuration Release --output dist/publish
+npm ci
+npm test
+```
+
+The .NET build embeds the frontend JavaScript. Distribute only the plugin DLL,
+the version's `meta.json` and `coverflow.png`; do not bundle Jellyfin runtime DLLs.
+The build output alone does not install the plugin or restart your server.
+
+For the isolated Chromium integration test:
+
+```bash
+npx playwright install chromium
+npm run test:browser
+```
+
+`CHROMIUM_EXECUTABLE` can select an existing Chromium/Chrome binary. The optional
+`JELLYFIN_WEB_ROOT` environment variable enables an additional test against an
+extracted copy of the installed public Web bundles, including real React and
+MUI MenuItem/MenuList components. No credentials or live library are required.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [CHANGELOG.md](CHANGELOG.md).
+
+## Support the project
+
+If CoverFlow makes your collection more enjoyable, you can buy me a coffee to
+support its development. Support is entirely optional: the plugin stays free
+and open source, with no paid feature tier.
+
+[![Support CoverFlow on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/effecta)
+
+**https://ko-fi.com/effecta**
+
+## License and acknowledgments
+
+Copyright (C) 2026 Effecta. Licensed under **GPL-3.0-or-later**; see
+[LICENSE](LICENSE) and [NOTICE.md](NOTICE.md).
+
+Built for [Jellyfin](https://jellyfin.org/) and delivered through
+[JavaScript Injector](https://github.com/n00bcodr/Jellyfin-JavaScript-Injector).
+Those projects are independent of CoverFlow and are not responsible for its
+support. No Jellyfin or Apple affiliation or endorsement is implied.
