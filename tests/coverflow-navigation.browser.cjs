@@ -14,7 +14,7 @@ const catalog = Array.from({ length: 170 }, (_, n) => ({ Id: 'item-' + n, Type: 
 // Native card attributes, native view settings and the local-storage event match
 // the installed Jellyfin 12.4 code. Requests use a real HTTP resource observer;
 // no personal server, credentials or media are involved.
-const html = `<!doctype html><html><head><style>
+const html = `<!doctype html><html lang="it"><head><style>
 body{margin:0;background:#111;color:white;font:16px Arial}header{position:fixed;inset:0 0 auto;height:64px;background:#111;z-index:1200}
 header button{height:48px;width:48px}main{padding-top:80px;display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
 .card{height:120px;background:#243746;padding:8px}.card a{color:white}.MuiPopover-root{position:fixed;inset:0;z-index:1300}
