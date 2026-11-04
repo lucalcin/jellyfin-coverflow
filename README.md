@@ -107,13 +107,13 @@ on access to the maintainer's home media server.
 
 ### Manual alternative
 
-Download `CoverFlow_0.4.7_Jellyfin12.zip` from
-[Releases](https://github.com/lucalcin/jellyfin-coverflow/releases/tag/v0.4.7).
+Download `CoverFlow_0.4.8_Jellyfin12.zip` from
+[Releases](https://github.com/lucalcin/jellyfin-coverflow/releases/tag/v0.4.8).
 Stop Jellyfin and extract its three files into a dedicated plugin-version
-directory such as `CoverFlow_0.4.7.0` under **your installation's plugin directory**:
+directory such as `CoverFlow_0.4.8.0` under **your installation's plugin directory**:
 
 ```text
-CoverFlow_0.4.7.0/
+CoverFlow_0.4.8.0/
   Jellyfin.Plugin.CoverFlow.dll
   meta.json
   coverflow.png

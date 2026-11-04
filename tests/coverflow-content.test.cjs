@@ -67,7 +67,7 @@ function runtime(storage = new Map()) {
                 selectInitial, applyPendingInitial, getEntryInitial, rememberFlowSelection, getSelectionScope,
                 findNativeItemPage, getNativeSettingsKey, readNativePageSettings, nativeSelectionSignature, openCoverFlow,
                 language, messages, t, translated, syncLanguage, refreshTranslations, connectNativeTranslations,
-                getSortFieldForLabel, nativeViewMode, setStatus };
+                getSortFieldForLabel, nativeViewMode, setStatus, getAlbumArtist };
         `);
     vm.runInNewContext(source, { window, document, console, Date, URL, URLSearchParams, DOMParser: class {
         parseFromString() { return { body: { textContent: 'Safe plot text' }, querySelectorAll: () => [] }; }
@@ -496,6 +496,30 @@ test('sorting inside a comic folder keeps the hierarchy and reorders its parent 
     r.showSeries(); await new Promise(resolve => setImmediate(resolve));
     assert.equal(r.state.folderId, null); assert.equal(r.state.entries[r.state.index].Id, 'b'); assert.equal(r.state.index, 0);
     assert.equal(queries.at(-1).SortOrder, 'Descending'); assert.equal(queries.at(-1).Recursive, false);
+});
+
+test('album artist names accept Jellyfin Name/Id pairs, legacy strings and missing metadata', () => {
+    const r = runtime();
+    assert.equal(r.getAlbumArtist({ AlbumArtists: [{ Id: 'a', Name: 'Giacomo Puccini' }, { Id: 'b', Name: 'Renata Tebaldi' }] }), 'Giacomo Puccini, Renata Tebaldi');
+    assert.equal(r.getAlbumArtist({ AlbumArtists: ['Patti Smith'] }), 'Patti Smith');
+    assert.equal(r.getAlbumArtist({ AlbumArtists: { Id: 'a', Name: 'Pyotr Tchaikovsky' } }), 'Pyotr Tchaikovsky');
+    assert.equal(r.getAlbumArtist({ AlbumArtists: [], ArtistItems: [{ Id: 'b', Name: 'Orchestra' }], Artists: ['Legacy'] }), 'Orchestra');
+    assert.equal(r.getAlbumArtist({ AlbumArtists: [null, {}, ' ', 5], Artists: 'Legacy artist' }), 'Legacy artist');
+    assert.equal(r.getAlbumArtist({ AlbumArtists: ['Artist', ' Artist '] }), 'Artist');
+    assert.equal(r.getAlbumArtist({}), '');
+});
+
+test('artist reordering keeps the album and tolerates structured metadata in the refreshed response', async () => {
+    const r = runtime(); addEntry(r, { Id: 'swan', Name: 'Swan Lake', Type: 'MusicAlbum', AlbumArtists: ['Pyotr Tchaikovsky'] });
+    r.state.api.getItems = async (user, q) => {
+        assert.equal(q.SortBy, 'AlbumArtist,SortName'); assert.equal(q.EnableTotalRecordCount, true);
+        return { Items: [{ Id: 'other', Type: 'MusicAlbum', AlbumArtists: [] },
+            { Id: 'swan', Name: 'Swan Lake', Type: 'MusicAlbum', AlbumArtists: { Id: 'composer', Name: 'Pyotr Tchaikovsky' } }], TotalRecordCount: 2 };
+    };
+    await r.reloadSortedLibrary({ by: 'AlbumArtist,SortName', order: 'Ascending' });
+    assert.equal(r.state.entries[r.state.index].Id, 'swan');
+    assert.equal(r.state.subtitle.textContent, 'Pyotr Tchaikovsky');
+    assert.equal(r.state.status.classList.contains('is-error'), false);
 });
 
 test('albums have square art and separate front/back controls without nested buttons', async () => {

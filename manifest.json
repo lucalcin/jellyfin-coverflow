@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/lucalcin/jellyfin-coverflow/main/artwork/coverflow.png",
     "versions": [
       {
+        "version": "0.4.8.0",
+        "changelog": "Fixes music artist labels displaying [object Object] by reading modern Name/Id pairs and legacy strings. Uses artist-item and track-artist fallbacks when album artists are missing. Explicitly requests total catalog counts.",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/lucalcin/jellyfin-coverflow/releases/download/v0.4.8/CoverFlow_0.4.8_Jellyfin12.zip",
+        "checksum": "BEA96023141E2CAF897C4EF515D09D73",
+        "timestamp": "2026-11-04T23:05:00Z"
+      },
+      {
         "version": "0.4.7.0",
         "changelog": "Follows Jellyfin interface language using native translations and live updates. Localizes common labels, counts, accessibility and menu matching; adds action icons with translated tooltips. CoverFlow-specific messages have Italian/English fallbacks.",
         "targetAbi": "12.0.0.0",

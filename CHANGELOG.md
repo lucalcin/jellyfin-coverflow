@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.8 — 2026-11-05
+
+- Fix music album artist names displaying as `[object Object]` below the cover
+  and on the track-list back. Read modern Jellyfin Name/Id pairs and legacy strings.
+- Fall back to artist items and track-artist names when album artists are absent;
+  ignore malformed optional values and trim/deduplicate display names.
+- Explicitly request total catalog counts for loading and selection recovery.
+- Add structured-artist and refreshed-response regression checks.
+
 ## 0.4.7 — 2026-11-03
 
 - Follow Jellyfin's interface language and reuse its loaded globalize dictionaries

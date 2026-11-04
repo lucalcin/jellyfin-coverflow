@@ -1886,7 +1886,8 @@
             SortBy: state.activeSortBy,
             SortOrder: state.activeSortOrder,
             StartIndex: startIndex,
-            Limit: limit
+            Limit: limit,
+            EnableTotalRecordCount: true
         });
     }
 
@@ -2482,7 +2483,19 @@
     }
 
     function getAlbumArtist(item) {
-        return (item.AlbumArtists || item.Artists || []).filter(Boolean).join(', ');
+        // Modern Jellyfin returns Name/Id pairs for album artists, while
+        // older responses use strings. Keep malformed optional metadata
+        // from turning a successful catalog load into a sorting error.
+        function names(values) {
+            if (!Array.isArray(values)) { values = values ? [values] : []; }
+            return values.map(function artistName(value) {
+                return typeof value === 'string' ? value : value && typeof value.Name === 'string' ? value.Name : '';
+            }).map(function trimName(name) { return name.trim(); }).filter(Boolean);
+        }
+        var artists = names(item.AlbumArtists);
+        if (!artists.length) { artists = names(item.ArtistItems); }
+        if (!artists.length) { artists = names(item.Artists); }
+        return Array.from(new Set(artists)).join(', ');
     }
 
     function formatDuration(ticks) {
