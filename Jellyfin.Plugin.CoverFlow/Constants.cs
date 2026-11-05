@@ -9,7 +9,7 @@ namespace Jellyfin.Plugin.CoverFlow;
 internal static class Constants
 {
     public const string PluginName = "CoverFlow";
-    public const string PluginVersion = "0.4.8.0";
+    public const string PluginVersion = "0.4.9.0";
     public const string ScriptId = "effecta-book-coverflow-main";
     public const string ScriptResourceName = "Jellyfin.Plugin.CoverFlow.Web.coverflow.js";
 

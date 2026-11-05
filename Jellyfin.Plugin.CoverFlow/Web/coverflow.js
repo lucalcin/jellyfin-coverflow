@@ -74,6 +74,9 @@
         layoutMenuRequestedUntil: 0,
         activeLibraryId: null,
         activeCollectionType: null,
+        activeCatalogKey: 'items',
+        musicContainer: null,
+        nativeMusicViews: Object.create(null),
         lastAutoOpenRoute: null,
         lastViewRoute: null,
         lastViewScope: null,
@@ -126,6 +129,10 @@
         season: ['Season', 'Season', 'Stagione'], specials: ['OptionSpecialEpisode', 'Specials', 'Speciali'],
         disc: ['Disc', 'Disc', 'Disco'], album: ['Album', 'Album', 'Album'],
         songs: ['HeaderTracks', 'Tracks', 'Tracce'], book: ['Books', 'Books', 'Libri'],
+        songItems: ['Songs', 'Songs', 'Brani'],
+        artists: ['Artists', 'Artists', 'Artisti'], albumArtists: ['HeaderAlbumArtists', 'Album artists', 'Artisti dell’album'],
+        albums: ['Albums', 'Albums', 'Album'], genres: ['Genres', 'Genres', 'Generi'],
+        playlists: ['Playlists', 'Playlists', 'Scalette'], collections: ['Collections', 'Collections', 'Collezioni'],
         overview: ['Overview', 'Overview', 'Dettagli'], items: ['Items', 'Items', 'Elementi'],
         library: ['HeaderLibraries', 'Libraries', 'Librerie'], untitled: ['Unknown', 'Unknown', 'Sconosciuto'],
         noItems: ['MessageNoItemsAvailable', 'No items found', 'Nessun elemento trovato'],
@@ -320,6 +327,121 @@
         return parameters.get('topParentId') || parameters.get('parentId') || null;
     }
 
+    function getMusicView() {
+        var hash = window.location.hash || '';
+        var params = new URLSearchParams(window.location.search + '&' + (hash.split('?')[1] || ''));
+        var library = state.libraryViews[getCurrentLibraryId()];
+        var isMusic = /^#?\/music(?:\?|$)/i.test(hash) || params.get('collectionType') === 'music'
+            || library && library.CollectionType === 'music';
+        if (!isMusic) { return null; }
+        var tabs = ['albums', 'suggestions', 'albumartists', 'artists', 'playlists', 'songs', 'genres', 'collections'];
+        var tab = params.get('tab');
+        if (tab !== null) { return tabs[Number(tab)] || 'albums'; }
+        if (state.nativeMusicViews[window.location.href]) { return state.nativeMusicViews[window.location.href]; }
+        // Native landing preferences use the view's string name, not its index.
+        try {
+            var landing = window.localStorage.getItem('landing-' + getCurrentLibraryId());
+            if (landing) {
+                landing = landing.replace(/^"|"$/g, '').toLowerCase();
+                if (tabs.includes(landing)) { return landing; }
+            }
+        } catch (error) { /* Browser storage is optional. */ }
+        return 'albums';
+    }
+
+    function getCatalogKey() {
+        var music = getMusicView();
+        return music ? 'music:' + music : 'items';
+    }
+
+    function getSortScope(libraryId) {
+        var music = getMusicView();
+        return libraryId + (music && music !== 'albums' ? ':' + music : '');
+    }
+
+    function isMusicGroup(entry) {
+        return Boolean(entry && (entry.ecfMusicKind || entry.Type === 'Playlist' || entry.Type === 'MusicArtist'));
+    }
+
+    function musicGroupKind(entry) {
+        return entry.ecfMusicKind || (entry.Type === 'Playlist' ? 'playlists' : 'artists');
+    }
+
+    function requestCatalog(userId, options, kind) {
+        kind = kind || 'items';
+        options = Object.assign({}, options);
+        delete options.__ecfCatalog;
+        if (kind === 'albumartists' || kind === 'artists') {
+            options.PersonTypes = kind === 'albumartists' ? 'AlbumArtist' : 'Artist';
+            delete options.IncludeItemTypes;
+            delete options.includeitemtypes;
+            delete options.persontypes;
+            return catalogRequest(state.api.getPeople(userId, options)).then(function markArtists(response) {
+                return Object.assign({}, response, { Items: (response.Items || []).map(function artist(item) {
+                    return Object.assign({}, item, { ecfMusicKind: kind });
+                }) });
+            });
+        }
+        if (kind === 'genres') {
+            return catalogRequest(state.api.getGenres(userId, options)).then(function markGenres(response) {
+                return Object.assign({}, response, { Items: (response.Items || []).map(function genre(item) {
+                    return Object.assign({}, item, { ecfMusicKind: kind });
+                }) });
+            });
+        }
+        if (kind === 'playlistitems') {
+            var playlistId = options.ParentId || options.parentid;
+            delete options.ParentId; delete options.parentid;
+            options.UserId = userId;
+            return catalogRequest(state.api.getJSON(state.api.getUrl('Playlists/' + encodeURIComponent(playlistId) + '/Items', options)));
+        }
+        return catalogRequest(state.api.getItems(userId, options));
+    }
+
+    function catalogRequest(request) {
+        // Bound a stalled legacy API request. Late responses cannot repaint a
+        // cancelled generation; do not create a new retry loop on timeout.
+        var timer;
+        return Promise.race([Promise.resolve(request), new Promise(function deadline(resolve, reject) {
+            timer = window.setTimeout(function timedOut() { reject(new Error('Catalog request timed out.')); }, 30000);
+        })]).finally(function clearDeadline() { window.clearTimeout(timer); });
+    }
+
+    function isCurrentCatalogLoad(generation, catalogKey) {
+        return generation === state.loadGeneration && state.activeCatalogKey === catalogKey && getCatalogKey() === catalogKey;
+    }
+
+    function catalogLabel() {
+        if (state.musicContainer) { return state.musicContainer.kind === 'playlists' ? 'songItems' : 'albums'; }
+        var music = getMusicView();
+        return music === 'albumartists' ? 'albumArtists' : music === 'songs' ? 'songItems' : music || 'items';
+    }
+
+    function entryIdentity(entry) {
+        return entry.Id + (entry.PlaylistItemId ? ':' + entry.PlaylistItemId : '');
+    }
+
+    function musicGroupOptions(entry, startIndex, limit) {
+        var kind = musicGroupKind(entry);
+        var options = { ParentId: state.activeLibraryId, Recursive: true, IncludeItemTypes: 'MusicAlbum',
+            Fields: 'PrimaryImageAspectRatio,People,ChildCount,ParentId,SortName', SortBy: 'SortName', SortOrder: 'Ascending',
+            StartIndex: startIndex, Limit: limit, EnableTotalRecordCount: true };
+        if (kind === 'playlists') { options.ParentId = entry.Id; delete options.IncludeItemTypes; }
+        else if (kind === 'genres') { options.GenreIds = entry.Id; }
+        else if (entry.Type === 'MusicArtist') {
+            options[kind === 'albumartists' ? 'AlbumArtistIds' : 'ArtistIds'] = entry.Id;
+        } else {
+            options.PersonIds = entry.Id;
+            options.PersonTypes = kind === 'albumartists' ? 'AlbumArtist' : 'Artist';
+        }
+        return options;
+    }
+
+    function musicGroupPage(entry, startIndex, limit) {
+        return requestCatalog(state.api.getCurrentUserId(), musicGroupOptions(entry, startIndex, limit),
+            musicGroupKind(entry) === 'playlists' ? 'playlistitems' : 'items');
+    }
+
     function getPreferenceKey() {
         var serverId = state.api && state.api.serverInfo ? state.api.serverInfo.Id : 'server';
         var userId = state.api && state.api.getCurrentUserId ? state.api.getCurrentUserId() : 'user';
@@ -336,13 +458,16 @@
     }
 
     function getSelectionScope(parentId) {
-        return getPreferenceKey() + ':' + getCurrentLibraryId() + ':' + normalizeItemId(parentId || getNativeParentId());
+        var music = getMusicView();
+        return getPreferenceKey() + ':' + getCurrentLibraryId() + ':' + normalizeItemId(parentId || getNativeParentId())
+            + (music && music !== 'albums' ? ':' + music : '');
     }
 
     function rememberFlowSelection() {
         var entry = state.entries[state.index];
         if (!state.api || !state.activeLibraryId || state.overlay && state.overlay.hidden
-            || !entry || !entry.Id || state.activeLibraryId !== getCurrentLibraryId()) { return null; }
+            || !entry || !entry.Id || state.activeLibraryId !== getCurrentLibraryId()
+            || state.activeCatalogKey !== getCatalogKey()) { return null; }
         var parentId = state.folderId || state.activeLibraryId;
         var anchor = { id: entry.Id, entry: entry, parentId: parentId, scope: getSelectionScope(parentId) };
         state.selectionAnchors[anchor.scope] = anchor;
@@ -434,6 +559,8 @@
         var prefixes = { Movie: 'movies', Series: 'series', MusicAlbum: 'albums', Folder: 'folders', Book: 'books',
             Audio: 'songs', Photo: 'photos', PhotoAlbum: 'photoalbums', Video: 'videos', BoxSet: 'collections' };
         var preferred = types.map(function nativeType(type) { return prefixes[type]; }).filter(Boolean);
+        var music = getMusicView();
+        if (music) { preferred = [music]; }
         var keys = [];
         try {
             for (var i = 0; i < window.localStorage.length; i += 1) {
@@ -486,7 +613,7 @@
         var pageSize = Number(query.limit) || 0;
         var total = Infinity;
         for (var start = 0; start < total;) {
-            var response = await state.api.getItems(state.api.getCurrentUserId(), Object.assign({}, options, { startindex: start, limit: PAGE_SIZE }));
+            var response = await requestCatalog(state.api.getCurrentUserId(), Object.assign({}, options, { startindex: start, limit: PAGE_SIZE }), query.__ecfCatalog);
             if (!isCurrent()) { return null; }
             var page = response.Items || [];
             total = response.TotalRecordCount == null ? start + page.length : response.TotalRecordCount;
@@ -496,7 +623,7 @@
                 var pageStart = pageSize ? Math.floor(index / pageSize) * pageSize : 0;
                 var first = page[pageStart - start];
                 if (!first) {
-                    var targetPage = await state.api.getItems(state.api.getCurrentUserId(), Object.assign({}, options, { startindex: pageStart, limit: pageSize || PAGE_SIZE }));
+                    var targetPage = await requestCatalog(state.api.getCurrentUserId(), Object.assign({}, options, { startindex: pageStart, limit: pageSize || PAGE_SIZE }), query.__ecfCatalog);
                     if (!isCurrent()) { return null; }
                     first = (targetPage.Items || [])[0];
                 }
@@ -930,6 +1057,13 @@
 
     function syncLauncher() {
         syncLanguage();
+        if (getMusicView() === 'suggestions') {
+            if (state.overlay && !state.overlay.hidden) { closeCoverFlow(false); }
+            var unused = document.getElementById('effecta-coverflow-toolbar-button');
+            if (unused) { unused.remove(); }
+            state.button = null;
+            return;
+        }
         if (state.menuRoot && !state.menuRoot.isConnected) {
             releaseLayoutMenu();
         }
@@ -953,6 +1087,8 @@
             'button[aria-label="View settings"]',
             '.btnSelectView'
         ].join(','))).find(function isVisible(button) {
+            return button.getClientRects().length > 0;
+        }) || Array.from(document.querySelectorAll('button[aria-describedby="sort-popover"]')).find(function visibleSort(button) {
             return button.getClientRects().length > 0;
         });
 
@@ -999,10 +1135,12 @@
         }
         var sort = getCurrentSortSettings();
         var libraryChanged = libraryId !== state.activeLibraryId;
+        var contextChanged = getCatalogKey() !== state.activeCatalogKey;
         var sortChanged = sort.by !== state.activeSortBy || sort.order !== state.activeSortOrder;
-        if (libraryChanged) {
+        if (libraryChanged || contextChanged) {
             selectLibrary(libraryId);
-            loadBooks();
+            var anchor = state.selectionAnchors[getSelectionScope()];
+            loadBooks(false, anchor && anchor.id);
         } else if (sortChanged) {
             reloadSortedLibrary(sort);
         }
@@ -1080,6 +1218,8 @@
         var separator = key.lastIndexOf(' - ');
         var normalizeId = function normalizeId(value) { return String(value).replace(/-/g, '').toLowerCase(); };
         if (separator <= 0 || normalizeId(key.slice(separator + 3)) !== normalizeId(libraryId)) { return null; }
+        var music = getMusicView();
+        if (music && key.slice(0, separator).toLowerCase() !== music) { return null; }
         try {
             var value = JSON.parse(window.localStorage.getItem(key) || 'null');
             var by = value && (Array.isArray(value.SortBy) ? value.SortBy.join(',') : value.SortBy);
@@ -1111,7 +1251,7 @@
 
     function rememberNativeSort(libraryId, by, order) {
         if (!libraryId || !by || !order) { return; }
-        state.sortPreferences[libraryId] = { by: by, order: order };
+        state.sortPreferences[getSortScope(libraryId)] = { by: by, order: order };
         syncOpenLibrary();
     }
 
@@ -1145,7 +1285,7 @@
     }
 
     function readNativeSortRequest(resource) {
-        if (!resource.name || !/\/Items(?:\?|$)/i.test(resource.name)) { return; }
+        if (!resource.name || !/\/(?:Items|Persons|Genres|MusicGenres|Artists(?:\/AlbumArtists)?)(?:\?|$)/i.test(resource.name)) { return; }
         try {
             var url = new URL(resource.name, window.location.href);
             var server = typeof state.api.serverAddress === 'function' ? state.api.serverAddress() : window.location.origin;
@@ -1162,12 +1302,29 @@
             var libraryId = getCurrentLibraryId();
             var normalizeId = function normalizeId(value) { return String(value || '').replace(/-/g, '').toLowerCase(); };
             if (!libraryId || normalizeId(params.parentid) !== normalizeId(getNativeParentId())) { return; }
+            var music = getMusicView();
+            var kind = /\/Persons$/i.test(url.pathname) ? /AlbumArtist/i.test(params.persontypes || '') ? 'albumartists' : 'artists'
+                : /\/Artists\/AlbumArtists$/i.test(url.pathname) ? 'albumartists'
+                : /\/Artists$/i.test(url.pathname) ? 'artists'
+                : /\/(?:MusicGenres|Genres)$/i.test(url.pathname) ? 'genres'
+                : params.includeitemtypes === 'Playlist' ? 'playlists'
+                : params.includeitemtypes === 'Audio' ? 'songs'
+                : params.includeitemtypes === 'BoxSet' ? 'collections' : 'albums';
+            if (music) {
+                var routeParams = new URLSearchParams(window.location.search + '&' + (window.location.hash.split('?')[1] || ''));
+                if (!routeParams.has('tab') && !state.nativeMusicViews[window.location.href]) {
+                    state.nativeMusicViews[window.location.href] = kind;
+                    music = getMusicView();
+                }
+                if (kind !== music) { return; }
+            }
             var scope = getSelectionScope();
             var started = Number(resource.startTime) || 0;
             // A native render can start before its preference event is delivered.
             // Track paging/filters by request time, separately from the sort barrier.
             if (started >= (state.nativeQueryTimes[scope] || 0)) {
                 var query = Object.assign({}, params);
+                if (music) { query.__ecfCatalog = kind; }
                 Object.keys(query).forEach(function omitCredentials(key) {
                     if (/token|api.?key|authorization|userid/i.test(key)) { delete query[key]; }
                 });
@@ -1253,7 +1410,9 @@
         var parameters = new URLSearchParams(window.location.search + '&' + hashQuery);
         var routeSortBy = parameters.get('sortBy') || parameters.get('SortBy');
         var routeSortOrder = parameters.get('sortOrder') || parameters.get('SortOrder');
-        var native = readNativeStoredSort() || state.sortPreferences[getCurrentLibraryId()];
+        var music = getMusicView();
+        if (music === 'albumartists' || music === 'artists' || music === 'genres') { return { by: 'SortName', order: 'Ascending' }; }
+        var native = readNativeStoredSort() || state.sortPreferences[getSortScope(getCurrentLibraryId())];
         return {
             by: native && native.by || routeSortBy || 'SortName',
             order: native && native.order || routeSortOrder || 'Ascending'
@@ -1265,6 +1424,7 @@
         var route = window.location.href;
         var scope = getPreferenceKey();
         if (state.api && libraryId && getLibraryView(libraryId) === 'coverflow'
+            && getMusicView() !== 'suggestions'
             && state.lastAutoOpenRoute !== route
             && (!state.overlay || state.overlay.hidden)) {
             state.lastAutoOpenRoute = route;
@@ -1627,12 +1787,13 @@
     }
 
     async function openCoverFlow() {
+        if (getMusicView() === 'suggestions') { closeCoverFlow(false); return; }
         var libraryId = getCurrentLibraryId();
         var anchor = !state.overlay || state.overlay.hidden ? captureNativeSelection() : rememberFlowSelection();
         cancelNativeSelection();
         var sort = getCurrentSortSettings();
         var sortChanged = state.activeSortBy !== sort.by || state.activeSortOrder !== sort.order;
-        if (libraryId && (state.activeLibraryId !== libraryId
+        if (libraryId && (state.activeLibraryId !== libraryId || state.activeCatalogKey !== getCatalogKey()
             || normalizeItemId(state.folderId || state.activeLibraryId) !== normalizeItemId(getNativeParentId()))) {
             selectLibrary(libraryId);
             sortChanged = false;
@@ -1664,7 +1825,7 @@
         closeDetails();
         state.detailCache.clear();
         state.folderStack = [];
-        state.folderId = normalizeItemId(getNativeParentId()) !== normalizeItemId(libraryId) ? getNativeParentId() : null;
+        state.musicContainer = null;
         state.pendingInitial = null;
         setSearchVisible(false);
         var sort = getCurrentSortSettings();
@@ -1678,6 +1839,10 @@
         state.books = [];
         state.series = [];
         state.entries = [];
+        state.folderId = normalizeItemId(getNativeParentId()) !== normalizeItemId(libraryId) ? getNativeParentId() : null;
+        // Commit the new context only after helpers have finished rendering the
+        // old cards. Otherwise closing search can save an album as an artist.
+        state.activeCatalogKey = getCatalogKey();
         state.index = 0;
         state.mode = 'items';
         state.loadingLoaded = 0;
@@ -1769,6 +1934,7 @@
         }
 
         var generation = ++state.loadGeneration;
+        var catalogKey = state.activeCatalogKey;
         try {
             var userId = state.api.getCurrentUserId();
             var parentId = state.folderId || state.activeLibraryId;
@@ -1782,27 +1948,32 @@
                 0,
                 INITIAL_PAGE_SIZE
             );
-            if (generation !== state.loadGeneration) {
+            if (!isCurrentCatalogLoad(generation, catalogKey)) {
                 return;
             }
             // Keep the old cards until the selected ID is found in the new order.
             // The anchor may be beyond the usual window; do not silently replace it.
             var items = [];
             var seen = new Set();
+            var seenEntries = new Set();
             var page = firstResponse.Items || [];
             var scanned = page.length;
             var total = firstResponse.TotalRecordCount == null ? page.length : firstResponse.TotalRecordCount;
             while (true) {
+                var previousCount = seenEntries.size;
                 page.forEach(function stageItem(item) {
                     var id = normalizeItemId(item.Id);
-                    if (!seen.has(id)) { seen.add(id); items.push(item); }
+                    var identity = entryIdentity(item);
+                    if (!seenEntries.has(identity)) { seenEntries.add(identity); seen.add(id); items.push(item); }
                 });
+                if (page.length && seenEntries.size === previousCount) { throw new Error('Catalog pagination made no progress.'); }
                 var current = !explicitAnchorId && anchorId && state.entries[state.index];
                 anchorId = current && current.Id || anchorId;
-                var foundAnchor = seen.has(normalizeItemId(anchorId));
+                var occurrence = current && current.PlaylistItemId ? entryIdentity(current) : null;
+                var foundAnchor = occurrence ? seenEntries.has(occurrence) : seen.has(normalizeItemId(anchorId));
                 if (!anchorId || foundAnchor || scanned >= total || page.length === 0) { break; }
                 page = (await loadLibraryPage(userId, parentId, state.activeCollectionType, scanned, PAGE_SIZE)).Items || [];
-                if (generation !== state.loadGeneration) { return; }
+                if (!isCurrentCatalogLoad(generation, catalogKey)) { return; }
                 scanned += page.length;
             }
             if (anchorId && !seen.has(normalizeItemId(anchorId))) {
@@ -1824,7 +1995,7 @@
                 loadRemainingItems(userId, parentId, state.activeCollectionType, generation);
             }
         } catch (error) {
-            if (generation !== state.loadGeneration) {
+            if (!isCurrentCatalogLoad(generation, catalogKey)) {
                 return;
             }
             console.error('CoverFlow: unable to load library items.', error);
@@ -1840,6 +2011,7 @@
     }
 
     async function loadRemainingItems(userId, parentId, collectionType, generation) {
+        var catalogKey = state.activeCatalogKey;
         try {
             while (state.loadingLoaded < state.loadingTotal && state.loadingLoaded < MAX_ITEMS) {
                 var response = await loadLibraryPage(
@@ -1849,25 +2021,28 @@
                     state.loadingLoaded,
                     Math.min(PAGE_SIZE, MAX_ITEMS - state.loadingLoaded)
                 );
-                if (generation !== state.loadGeneration) {
+                if (!isCurrentCatalogLoad(generation, catalogKey)) {
                     return;
                 }
                 var page = response.Items || [];
                 if (page.length === 0) {
                     break;
                 }
+                var previousCount = state.books.length;
                 appendUniqueItems(page);
+                if (previousCount === state.books.length) { break; }
                 state.loadingLoaded += page.length;
                 rebuildEntries();
                 selectTypeahead(false);
                 renderBooks();
             }
         } catch (error) {
-            if (generation === state.loadGeneration) {
+            if (isCurrentCatalogLoad(generation, catalogKey)) {
                 console.error('CoverFlow: background loading stopped.', error);
             }
         }
-        if (generation === state.loadGeneration) {
+        if (isCurrentCatalogLoad(generation, catalogKey)) {
+            state.loadingTotal = Math.min(state.loadingTotal, state.loadingLoaded);
             state.loadingComplete = true;
             applyPendingInitial();
             updateAlphabet();
@@ -1876,10 +2051,18 @@
     }
 
     function loadLibraryPage(userId, parentId, collectionType, startIndex, limit) {
-        return state.api.getItems(userId, {
+        if (collectionType === 'music' && state.musicContainer && state.musicContainer.kind !== 'collections') {
+            return musicGroupPage(state.musicContainer.entry, startIndex, limit);
+        }
+        var music = collectionType === 'music' ? getMusicView() || 'albums' : null;
+        var types = { albums: 'MusicAlbum', songs: 'Audio', playlists: 'Playlist', collections: 'BoxSet' };
+        var kind = music && !state.folderId ? music : 'items';
+        return requestCatalog(userId, {
             ParentId: parentId,
             Recursive: collectionType !== 'books' && !state.folderId,
-            IncludeItemTypes: collectionType === 'books' ? 'Folder,Book' : getItemTypesForLibrary(collectionType),
+            IncludeItemTypes: collectionType === 'books' ? 'Folder,Book'
+                : music && !state.folderId ? types[music] || 'MusicAlbum'
+                : music ? 'MusicAlbum,Audio,Folder,BoxSet,Playlist' : getItemTypesForLibrary(collectionType),
             Fields: 'PrimaryImageAspectRatio,People,ChildCount,ParentId,SortName',
             ImageTypeLimit: 1,
             EnableImageTypes: 'Primary',
@@ -1888,15 +2071,15 @@
             StartIndex: startIndex,
             Limit: limit,
             EnableTotalRecordCount: true
-        });
+        }, kind);
     }
 
     function appendUniqueItems(items) {
         var seen = Object.create(null);
-        state.books.forEach(function rememberItem(item) { seen[item.Id] = true; });
+        state.books.forEach(function rememberItem(item) { seen[entryIdentity(item)] = true; });
         items.forEach(function appendItem(item) {
-            if (!seen[item.Id]) {
-                seen[item.Id] = true;
+            if (!seen[entryIdentity(item)]) {
+                seen[entryIdentity(item)] = true;
                 state.books.push(item);
             }
         });
@@ -1905,7 +2088,7 @@
     function rebuildEntries() {
         var previousIndex = state.index;
         var selected = state.entries[state.index];
-        var selectedId = selected && selected.Id;
+        var selectedId = selected && entryIdentity(selected);
         var selectedSeriesKey = selected && selected.kind === 'series' ? selected.key : null;
         var openSeriesKey = state.currentSeries && state.currentSeries.key;
 
@@ -1928,7 +2111,7 @@
         }
 
         var preservedIndex = state.entries.findIndex(function preserveSelection(entry) {
-            return selectedSeriesKey ? entry.key === selectedSeriesKey : entry.Id === selectedId;
+            return selectedSeriesKey ? entry.key === selectedSeriesKey : entryIdentity(entry) === selectedId;
         });
         state.index = preservedIndex >= 0 ? preservedIndex : Math.min(state.index, Math.max(0, state.entries.length - 1));
         if (state.flowPosition !== null) {
@@ -2106,6 +2289,7 @@
             var parent = state.folderStack.pop();
             state.loadGeneration += 1;
             state.folderId = parent.folderId;
+            state.musicContainer = parent.musicContainer || null;
             state.books = parent.books;
             state.entries = parent.books;
             state.index = parent.index;
@@ -2163,7 +2347,8 @@
             state.activeStart = 0;
             state.activeEnd = -1;
             clearTextTranslation(state.title);
-            state.title.textContent = (state.libraryViews[state.activeLibraryId] || {}).Name || 'CoverFlow';
+            state.title.textContent = state.musicContainer && state.musicContainer.entry.Name
+                || (state.libraryViews[state.activeLibraryId] || {}).Name || 'CoverFlow';
             translated(state.subtitle, state.loadingComplete ? 'noItems' : 'loading');
             state.backButton.hidden = state.folderStack.length === 0;
             setStatus(state.loadingComplete ? 'noItems' : 'loading', false);
@@ -2171,7 +2356,7 @@
         }
 
         state.entries.forEach(function createCard(entry, index) {
-            var entryKey = entry.kind === 'series' ? 'series:' + entry.key : 'item:' + entry.Id;
+            var entryKey = entry.kind === 'series' ? 'series:' + entry.key : 'item:' + entryIdentity(entry);
             var retained = previousCards.get(entryKey);
             if (retained) {
                 previousCards.delete(entryKey);
@@ -2184,11 +2369,11 @@
                 return;
             }
             var card = element('div', 'ecf-card');
-            var isGroup = entry.kind === 'series' || isLibraryFolder(entry);
+            var isGroup = entry.kind === 'series' || isLibraryFolder(entry) || isMusicGroup(entry);
             card.dataset.index = String(index);
             card.dataset.entryKey = entryKey;
             card.classList.add(isGroup ? 'is-group' : 'is-item');
-            card.classList.toggle('is-album', entry.Type === 'MusicAlbum');
+            card.classList.toggle('is-album', ['MusicAlbum', 'MusicArtist', 'Audio', 'Playlist'].includes(entry.Type) || Boolean(entry.ecfMusicKind));
             if (getEntryTitle(entry)) { card.setAttribute('aria-label', getEntryTitle(entry)); }
             else { translated(card, isGroup ? 'folder' : 'items', [], 'aria-label'); }
             var flipper = element('div', 'ecf-flipper');
@@ -2214,11 +2399,13 @@
                 );
             }
             var surface = element('span', 'ecf-cover-surface');
-            surface.appendChild(element('span', 'ecf-card-placeholder', entry.Type === 'MusicAlbum' ? '♫' : '▤'));
+            surface.appendChild(element('span', 'ecf-card-placeholder', ['MusicAlbum', 'Audio'].includes(entry.Type)
+                || isMusicGroup(entry) ? '♫' : '▤'));
             front.appendChild(surface);
             if (isGroup) {
                 front.appendChild(translatedElement('span', 'ecf-kind-badge', entry.kind === 'series'
-                    ? 'seriesBadge' : 'folder', entry.kind === 'series' ? [entry.books.length] : []));
+                    ? 'seriesBadge' : isMusicGroup(entry) ? musicGroupKind(entry) === 'albumartists' ? 'albumArtists' : musicGroupKind(entry)
+                    : entry.Type === 'BoxSet' ? 'collections' : 'folder', entry.kind === 'series' ? [entry.books.length] : []));
             } else if (entry.IndexNumber !== null && entry.IndexNumber !== undefined) {
                 front.appendChild(element('span', 'ecf-item-index', '#' + entry.IndexNumber));
             }
@@ -2336,7 +2523,7 @@
             if (current.Name) { clearTextTranslation(state.title); state.title.textContent = current.Name; }
             else { translated(state.title, 'untitled'); }
             translated(state.subtitle, 'itemSubtitle', [current]);
-            setStatus('catalogStatus', false, state.index + 1, state.entries.length, 'items');
+            setStatus('catalogStatus', false, state.index + 1, state.entries.length, catalogLabel());
             state.backButton.hidden = state.folderStack.length === 0;
         }
     }
@@ -2348,6 +2535,10 @@
 
     function loadCardImage(card, entry) {
         card.dataset.loaded = 'true';
+        if (isMusicGroup(entry)) {
+            loadMusicGroupCover(card, entry);
+            return;
+        }
         if (isLibraryFolder(entry)) {
             loadFolderCover(card, entry);
             return;
@@ -2402,6 +2593,29 @@
         return serverAddress.replace(/\/$/, '')
             + '/Items/' + encodeURIComponent(itemId)
             + '/Images/Primary?maxWidth=' + (window.innerWidth <= 600 ? 400 : 720) + '&quality=85';
+    }
+
+    function loadMusicGroupCover(card, entry) {
+        var surface = card.querySelector('.ecf-cover-surface');
+        var image = element('img');
+        image.alt = '';
+        image.decoding = 'async';
+        image.addEventListener('load', function showArtistOrGenre() { surface.replaceChildren(image); }, { once: true });
+        image.addEventListener('error', async function useAlbumArtwork() {
+            try {
+                // Only visible cards ask for one representative album. Artists
+                // and genres are filters, never filesystem parent folders.
+                var response = await musicGroupPage(entry, 0, 1);
+                var album = (response.Items || [])[0];
+                if (!album || !card.isConnected) { return; }
+                var fallback = element('img');
+                fallback.alt = '';
+                fallback.decoding = 'async';
+                fallback.addEventListener('load', function showAlbum() { surface.replaceChildren(fallback); }, { once: true });
+                fallback.src = getPrimaryImageUrl(album.Id);
+            } catch (error) { /* Missing artwork must not block navigation. */ }
+        }, { once: true });
+        image.src = getPrimaryImageUrl(entry.Id);
     }
 
     async function loadFolderCover(card, entry) {
@@ -2460,6 +2674,9 @@
         if (item.Type === 'MusicAlbum') {
             return [getAlbumArtist(item), item.ProductionYear].filter(Boolean).join(' · ');
         }
+        if (isMusicGroup(item)) { return t(musicGroupKind(item) === 'albumartists' ? 'albumArtists' : musicGroupKind(item)); }
+        if (item.Type === 'Audio') { return [getAlbumArtist(item), item.Album, formatDuration(item.RunTimeTicks)].filter(Boolean).join(' · '); }
+        if (item.Type === 'BoxSet') { return t('collections'); }
         if (isLibraryFolder(item)) {
             return t('folder');
         }
@@ -2516,8 +2733,10 @@
 
     function detailKind(entry) {
         if (entry.kind === 'series') { return 'volumes'; }
+        if (isMusicGroup(entry)) { return musicGroupKind(entry) === 'playlists' ? 'playlist' : 'albums'; }
         if (isLibraryFolder(entry)) { return 'folder'; }
         if (entry.Type === 'MusicAlbum') { return 'tracks'; }
+        if (entry.Type === 'Audio') { return 'track'; }
         if (entry.Type === 'Series') { return 'episodes'; }
         return 'plot';
     }
@@ -2569,9 +2788,11 @@
         stopArrowHold();
         state.folderStack.push({ folderId: state.folderId, books: state.books, index: state.index,
             loaded: state.loadingLoaded, total: state.loadingTotal, complete: state.loadingComplete,
-            sortBy: state.activeSortBy, sortOrder: state.activeSortOrder });
+            sortBy: state.activeSortBy, sortOrder: state.activeSortOrder, musicContainer: state.musicContainer });
         state.loadGeneration += 1;
         state.folderId = entry.Id;
+        state.musicContainer = isMusicGroup(entry) ? { kind: musicGroupKind(entry), entry: entry }
+            : state.activeCollectionType === 'music' && entry.Type === 'BoxSet' ? { kind: 'collections', entry: entry } : null;
         state.index = 0;
         state.books = [];
         state.entries = [];
@@ -2581,11 +2802,12 @@
 
     async function fetchDetailPage(entry, startIndex) {
         var kind = detailKind(entry);
+        if (kind === 'albums' || kind === 'playlist') { return musicGroupPage(entry, startIndex, 100); }
         var userId = state.api.getCurrentUserId();
         var options = {
             ParentId: entry.Id,
             Recursive: kind !== 'folder',
-            Fields: 'ParentId,PrimaryImageAspectRatio',
+            Fields: 'PrimaryImageAspectRatio,People,ChildCount,ParentId,SortName',
             SortBy: kind === 'tracks' || kind === 'episodes' ? 'ParentIndexNumber,IndexNumber,SortName' : 'SortName',
             SortOrder: 'Ascending',
             StartIndex: startIndex,
@@ -2609,6 +2831,10 @@
             if (duration) { parts.push(t('minutes', Math.round(duration / 600000000))); }
         } else if (data.kind === 'episodes') {
             parts = [item.ProductionYear, t(data.total === 1 ? 'oneEpisode' : 'episodeCount', data.total)];
+        } else if (data.kind === 'albums') {
+            parts = [t('albums') + ' · ' + t('itemCount', data.total)];
+        } else if (data.kind === 'playlist') {
+            parts = [t('songs') + ' · ' + t('itemCount', data.total)];
         } else if (data.kind === 'folder' || data.kind === 'volumes') {
             parts = [t('itemCount', data.total) + (data.complete === false ? ' · ' + t('loading') : '')];
         } else {
@@ -2642,6 +2868,8 @@
         if (data.kind === 'plot') {
             var plot = overviewText(data.item.Overview);
             body.appendChild(plot ? element('p', 'ecf-plot', plot) : translatedElement('p', 'ecf-plot', 'noPlot'));
+        } else if (data.kind === 'track') {
+            body.appendChild(element('p', 'ecf-detail-note', getItemSubtitle(data.item)));
         } else {
             var previousSection = null;
             data.items.forEach(function addContentRow(item) {
@@ -2664,7 +2892,7 @@
                     : translatedElement('span', 'ecf-detail-name', 'untitled'));
                 row.appendChild(element('span', 'ecf-detail-duration', isLibraryFolder(item) ? '›' : formatDuration(item.RunTimeTicks)));
                 row.addEventListener('click', function openContentRow() {
-                    if (isLibraryFolder(item)) { browseFolder(item); } else { openItemDetails(item); }
+                    if (isLibraryFolder(item) || isMusicGroup(item)) { browseFolder(item); } else { openItemDetails(item); }
                 });
                 body.appendChild(row);
             });
@@ -2713,7 +2941,8 @@
         back.style.setProperty('--ecf-back-height', Math.max(180, Math.min(480, state.stage.clientHeight - 60)) + 'px');
         translated(back, 'contentOf', [getEntryTitle(entry)], 'aria-label');
         var header = element('div', 'ecf-back-header');
-        var labels = { tracks: 'songs', episodes: 'episodes', folder: 'folder', volumes: 'book', plot: 'overview' };
+        var labels = { tracks: 'songs', episodes: 'episodes', folder: 'folder', volumes: 'book', plot: 'overview',
+            albums: 'albums', playlist: 'songs', track: 'songs' };
         header.append(translatedElement('p', 'ecf-back-kicker', labels[kind]),
             getEntryTitle(entry) ? element('h3', 'ecf-back-title', getEntryTitle(entry))
                 : translatedElement('h3', 'ecf-back-title', 'untitled'),
@@ -2729,7 +2958,7 @@
         translated(body, 'scrollContent', [], 'aria-label');
         body.appendChild(translatedElement('p', 'ecf-detail-note', 'loading'));
         var footer = element('div', 'ecf-back-footer');
-        if (kind === 'folder') {
+        if (kind === 'folder' || kind === 'albums' || kind === 'playlist') {
             addDetailAction(footer, 'browseFlow', function browseCurrentFolder() { browseFolder(entry); });
         } else if (kind === 'volumes') {
             addDetailAction(footer, 'browseFlow', function browseSeriesVolumes() { closeDetails(); openSeries(); });
@@ -2756,6 +2985,8 @@
             if (!data) {
                 if (kind === 'volumes') {
                     data = { kind: kind, item: entry, items: entry.books, total: entry.books.length, complete: state.loadingComplete };
+                } else if (kind === 'track') {
+                    data = { kind: kind, item: entry, items: [], total: 0 };
                 } else if (kind === 'plot') {
                     var item = await state.api.getItem(state.api.getCurrentUserId(), entry.Id);
                     data = { kind: kind, item: item, items: [], total: 0 };

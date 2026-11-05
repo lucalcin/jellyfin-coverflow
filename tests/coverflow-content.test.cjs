@@ -45,10 +45,15 @@ class Node {
 
 function runtime(storage = new Map()) {
     const timers = [];
+    const deadlines = new Map();
+    let deadlineId = 100000;
     const window = {
         innerWidth: 390, innerHeight: 844,
         location: { hash: '#/library?topParentId=library', search: '', origin: 'https://local.test', href: 'https://local.test/web/' },
-        setTimeout(fn) { timers.push(fn); return timers.length; }, clearTimeout() {},
+        setTimeout(fn, delay) {
+            if (delay >= 30000) { deadlines.set(++deadlineId, fn); return deadlineId; }
+            timers.push(fn); return timers.length;
+        }, clearTimeout(id) { deadlines.delete(id); },
         requestAnimationFrame(fn) { timers.push(fn); return timers.length; },
         removeEventListener() {}, addEventListener() {},
         localStorage: { getItem: key => storage.get(key) || null, setItem: (key, value) => storage.set(key, value),
@@ -67,7 +72,9 @@ function runtime(storage = new Map()) {
                 selectInitial, applyPendingInitial, getEntryInitial, rememberFlowSelection, getSelectionScope,
                 findNativeItemPage, getNativeSettingsKey, readNativePageSettings, nativeSelectionSignature, openCoverFlow,
                 language, messages, t, translated, syncLanguage, refreshTranslations, connectNativeTranslations,
-                getSortFieldForLabel, nativeViewMode, setStatus, getAlbumArtist };
+                getSortFieldForLabel, nativeViewMode, setStatus, getAlbumArtist,
+                getMusicView, getCatalogKey, selectLibrary, syncOpenLibrary, requestCatalog,
+                musicGroupPage, entryIdentity, catalogLabel, appendUniqueItems, loadCardImage };
         `);
     vm.runInNewContext(source, { window, document, console, Date, URL, URLSearchParams, DOMParser: class {
         parseFromString() { return { body: { textContent: 'Safe plot text' }, querySelectorAll: () => [] }; }
@@ -79,7 +86,8 @@ function runtime(storage = new Map()) {
         activeLibraryId: 'library', activeCollectionType: 'music',
         api: { getCurrentUserId: () => 'user' },
     });
-    return { ...api, window, document, flush() { const pending = timers.splice(0); pending.forEach(fn => fn()); } };
+    return { ...api, window, document, flush() { const pending = timers.splice(0); pending.forEach(fn => fn()); },
+        expireRequests() { [...deadlines.values()].forEach(fn => fn()); }, deadlines };
 }
 
 function addEntry(r, entry) {
@@ -87,6 +95,142 @@ function addEntry(r, entry) {
     r.renderBooks();
     return r.state.cards[0];
 }
+
+function musicView(r, tab) {
+    r.window.location.hash = '#/music?topParentId=library&tab=' + tab;
+    r.window.location.href = r.window.location.origin + '/web/' + r.window.location.hash;
+    r.state.libraryViews.library = { CollectionType: 'music', Name: 'Classica' };
+    r.selectLibrary('library');
+}
+
+test('every music menu section requests its own native catalog in the active library', async () => {
+    const r = runtime(); const calls = [];
+    for (const [method, endpoint] of [['getItems', 'Items'], ['getPeople', 'Persons'], ['getGenres', 'Genres']]) {
+        r.state.api[method] = async (user, options) => { calls.push({ endpoint, user, options });
+            return { Items: [{ Id: endpoint, Type: 'Person', Name: endpoint }], TotalRecordCount: 1 }; };
+    }
+    for (const [tab, endpoint, type] of [[0, 'Items', 'MusicAlbum'], [2, 'Persons', 'AlbumArtist'],
+        [3, 'Persons', 'Artist'], [4, 'Items', 'Playlist'], [5, 'Items', 'Audio'],
+        [6, 'Genres', 'MusicAlbum'], [7, 'Items', 'BoxSet']]) {
+        musicView(r, tab);
+        const response = await r.loadLibraryPage('user', 'library', 'music', 20, 10);
+        const call = calls.at(-1);
+        assert.equal(call.endpoint, endpoint); assert.equal(call.options.ParentId, 'library');
+        assert.equal(call.options.StartIndex, 20); assert.equal(call.options.Limit, 10);
+        assert.equal(call.options.EnableTotalRecordCount, true);
+        assert.equal(call.options.PersonTypes || call.options.IncludeItemTypes, type);
+        if (endpoint !== 'Items') { assert.equal(response.Items[0].ecfMusicKind, r.getMusicView()); }
+    }
+    musicView(r, 1); await r.openCoverFlow();
+    assert.equal(r.state.overlay.hidden, true); assert.equal(calls.length, 7);
+});
+
+test('artist and genre drill-downs filter albums, rather than treating names as parent folders', async () => {
+    const r = runtime(); const calls = [];
+    r.state.api.getItems = async (user, q) => { calls.push(q); return { Items: [], TotalRecordCount: 0 }; };
+    musicView(r, 2);
+    const person = { Id: 'composer', Type: 'Person', Name: 'Bach', ecfMusicKind: 'albumartists' };
+    await r.musicGroupPage(person, 0, 100);
+    assert.equal(calls.at(-1).ParentId, 'library'); assert.equal(calls.at(-1).PersonIds, 'composer');
+    assert.equal(calls.at(-1).PersonTypes, 'AlbumArtist'); assert.equal(calls.at(-1).IncludeItemTypes, 'MusicAlbum');
+    await r.musicGroupPage({ ...person, ecfMusicKind: 'artists' }, 0, 100);
+    assert.equal(calls.at(-1).PersonTypes, 'Artist');
+    await r.musicGroupPage({ Id: 'legacy', Type: 'MusicArtist', ecfMusicKind: 'albumartists' }, 0, 100);
+    assert.equal(calls.at(-1).AlbumArtistIds, 'legacy'); assert.equal(calls.at(-1).PersonIds, undefined);
+    await r.musicGroupPage({ Id: 'classical', Type: 'MusicGenre', ecfMusicKind: 'genres' }, 0, 100);
+    assert.equal(calls.at(-1).GenreIds, 'classical'); assert.equal(calls.at(-1).ParentId, 'library');
+});
+
+test('switching music sections keeps separate selections and ignores late album responses', async () => {
+    const r = runtime(); let release;
+    musicView(r, 0); const albumScope = r.getSelectionScope();
+    addEntry(r, { Id: 'album', Type: 'MusicAlbum', Name: 'Album' }); r.rememberFlowSelection();
+    r.state.api.getItems = () => new Promise(resolve => { release = resolve; });
+    const pending = r.loadBooks(true);
+    musicView(r, 2); const artistScope = r.getSelectionScope();
+    assert.notEqual(albumScope, artistScope);
+    r.state.api.getPeople = async () => ({ Items: [{ Id: 'person', Type: 'Person', Name: 'Bach' }], TotalRecordCount: 1 });
+    await r.loadBooks(); release({ Items: [{ Id: 'album', Type: 'MusicAlbum' }], TotalRecordCount: 1 }); await pending;
+    assert.equal(r.state.entries[0].Id, 'person'); assert.equal(r.state.entries[0].ecfMusicKind, 'albumartists');
+    assert.equal(r.state.selectionAnchors[albumScope].id, 'album');
+    assert.equal(r.state.selectionAnchors[artistScope].id, 'person');
+    assert.equal(r.state.reordering, false);
+});
+
+test('artist native-page restoration uses Persons with the matching role and ignores album traffic', async () => {
+    const r = runtime(); musicView(r, 2);
+    const scope = r.getSelectionScope();
+    r.readNativeSortRequest({ name: 'https://local.test/Persons?parentId=library&personTypes=AlbumArtist&limit=10&startIndex=0', startTime: 2 });
+    r.readNativeSortRequest({ name: 'https://local.test/Items?parentId=library&includeItemTypes=MusicAlbum&sortBy=DateCreated&sortOrder=Descending', startTime: 3 });
+    assert.equal(r.state.nativeQueries[scope].__ecfCatalog, 'albumartists');
+    assert.equal(r.getCurrentSortSettings().by, 'SortName');
+    const people = Array.from({ length: 11 }, (_, i) => ({ Id: i === 10 ? 'two' : 'person-' + i, Type: 'Person' }));
+    r.state.api.getPeople = async (user, q) => ({ Items: people.slice(q.startindex, q.startindex + q.limit), TotalRecordCount: 11 });
+    const result = await r.findNativeItemPage({ id: 'two', scope }, r.state.nativeQueries[scope], { StartIndex: 0 }, () => true);
+    assert.equal(result.startIndex, 10);
+});
+
+test('native music sort settings cannot leak across Album, Songs and Artists sections', () => {
+    const storage = new Map([
+        ['albums - library', JSON.stringify({ SortBy: ['AlbumArtist', 'SortName'], SortOrder: 'Descending' })],
+        ['songs - library', JSON.stringify({ SortBy: ['DateCreated', 'SortName'], SortOrder: 'Ascending' })],
+    ]);
+    const r = runtime(storage); musicView(r, 5); r.state.overlay.hidden = true;
+    assert.equal(r.readNativeStoredSort('albums - library'), null);
+    assert.equal(r.readNativeStoredSort('songs - library').by, 'DateCreated,SortName');
+    r.onNativeSortStorage({ key: 'songs - library' });
+    musicView(r, 0); assert.equal(r.getCurrentSortSettings().by, 'SortName');
+    r.onNativeSortStorage({ key: 'albums - library' }); assert.equal(r.getCurrentSortSettings().by, 'AlbumArtist,SortName');
+    musicView(r, 5); assert.equal(r.getCurrentSortSettings().by, 'DateCreated,SortName');
+    musicView(r, 2); assert.equal(r.getCurrentSortSettings().by, 'SortName');
+});
+
+test('playlists preserve stored sequence and repeated tracks with distinct playlist item IDs', async () => {
+    const r = runtime(); musicView(r, 4); let request;
+    const tracks = [{ Id: 'track', PlaylistItemId: 'first', Type: 'Audio', Name: 'Song' },
+        { Id: 'other', PlaylistItemId: 'second', Type: 'Audio', Name: 'Other' },
+        { Id: 'track', PlaylistItemId: 'third', Type: 'Audio', Name: 'Song again' }];
+    r.state.api.getUrl = (route, options) => { request = { route, options }; return route; };
+    r.state.api.getJSON = async () => ({ Items: tracks, TotalRecordCount: 3 });
+    r.browseFolder({ Id: 'playlist', Name: 'Favorites', Type: 'Playlist' });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(request.route, 'Playlists/playlist/Items'); assert.equal(request.options.UserId, 'user');
+    assert.equal(request.options.ParentId, undefined);
+    assert.deepEqual(Array.from(r.state.entries, r.entryIdentity), ['track:first', 'other:second', 'track:third']);
+    r.state.index = 2; r.rebuildEntries(); assert.equal(r.state.index, 2);
+    assert.equal(new Set(r.state.cards.map(card => card.dataset.entryKey)).size, 3);
+});
+
+test('artist artwork uses its own image then a filtered album, never the series-poster endpoint', async () => {
+    const r = runtime(); musicView(r, 2); let options;
+    r.state.api.getItems = async (user, q) => { options = q; return { Items: [{ Id: 'artwork' }] }; };
+    const card = addEntry(r, { Id: 'person', Type: 'Person', IsFolder: true, Name: 'Bach', ecfMusicKind: 'albumartists' });
+    // The image loader starts on visible cards; trigger it explicitly in this DOM fixture.
+    const original = r.document.createElement; const images = [];
+    r.document.createElement = tag => { const node = original(tag); if (tag === 'img') images.push(node); return node; };
+    r.loadCardImage(card, r.state.entries[0]);
+    assert.match(images[0].src, /\/Items\/person\/Images\/Primary/);
+    await images[0].events.error();
+    assert.equal(options.PersonIds, 'person'); assert.equal(options.ParentId, 'library');
+    assert.match(images[1].src, /\/Items\/artwork\/Images\/Primary/);
+});
+
+test('stalled catalog requests time out once and clear the recovering-selection state', async () => {
+    const r = runtime(); musicView(r, 2);
+    addEntry(r, { Id: 'person', Type: 'Person', Name: 'Bach', ecfMusicKind: 'albumartists' });
+    let calls = 0; r.state.api.getPeople = () => { calls++; return new Promise(() => {}); };
+    const pending = r.loadBooks(true); r.expireRequests(); await pending;
+    assert.equal(calls, 1); assert.equal(r.state.reordering, false); assert.equal(r.deadlines.size, 0);
+    assert.equal(r.state.entries[0].Id, 'person'); assert.equal(r.state.status.classList.contains('is-error'), true);
+});
+
+test('non-progressing catalog pages stop instead of endlessly restoring a missing artist', async () => {
+    const r = runtime(); musicView(r, 2); let calls = 0;
+    addEntry(r, { Id: 'missing', Name: 'Missing', Type: 'Person', ecfMusicKind: 'albumartists' });
+    r.state.api.getPeople = async () => { calls++; return { Items: [{ Id: 'same', Type: 'Person' }], TotalRecordCount: 1000 }; };
+    await r.loadBooks(true);
+    assert.equal(calls, 2); assert.equal(r.state.entries[0].Id, 'missing'); assert.equal(r.state.reordering, false);
+});
 
 function nativeTranslations(r, locale = 'en-us') {
     const dictionaries = {

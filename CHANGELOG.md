@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.9 — 2026-11-05
+
+- Match each music section: albums, album artists, artists, playlists, songs,
+  genres and collections. Keep Suggestions in Jellyfin's native section layout.
+- Load artists through Jellyfin 12's Persons endpoint with the matching role;
+  artist and genre cards reveal library-scoped albums and support browsing them.
+- Show square music cards with useful labels and filtered album-art fallbacks.
+  Preserve playlist order and repeated tracks using playlist occurrence IDs.
+- Separate current-item anchors, native page queries and sort preferences by
+  music section. Discard responses from sections that are no longer active.
+- Prevent search-panel cleanup from saving old cards in a new section; bound
+  stalled requests and stop pagination that returns the same page repeatedly.
+- Add music-menu browser coverage and focused context/navigation checks.
+
 ## 0.4.8 — 2026-11-05
 
 - Fix music album artist names displaying as `[object Object]` below the cover

@@ -1,6 +1,6 @@
 {
   "name": "jellyfin-coverflow",
-  "version": "0.4.8",
+  "version": "0.4.9",
   "private": true,
   "description": "Development checks for the CoverFlow Jellyfin Web plugin.",
   "license": "GPL-3.0-or-later",

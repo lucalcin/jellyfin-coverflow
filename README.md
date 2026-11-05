@@ -25,6 +25,11 @@ official Jellyfin plugin and does not add this interface to native TV clients.
   the View menu; return to Grid or List at any time.
 - **Flip to explore.** Square music albums reveal tracks; TV series show episodes
   grouped by season; books and movies show their descriptions.
+- **Music sections with their own content.** Albums, album artists, artists,
+  playlists, songs, genres and collections follow the selected Jellyfin section.
+  Artist/genre cards reveal albums; playlist cards reveal tracks in playlist order.
+  Each section keeps its own current selection. Suggestions retain Jellyfin's
+  native recommendation sections rather than showing an unrelated album catalog.
 - **Real comic folders.** Browse folders and subfolders, then their individual
   volumes. Existing folder structure is preserved, including duplicate names.
 - **Your library, your order.** Follow Jellyfin's sort criterion and direction
@@ -107,13 +112,13 @@ on access to the maintainer's home media server.
 
 ### Manual alternative
 
-Download `CoverFlow_0.4.8_Jellyfin12.zip` from
-[Releases](https://github.com/lucalcin/jellyfin-coverflow/releases/tag/v0.4.8).
+Download `CoverFlow_0.4.9_Jellyfin12.zip` from
+[Releases](https://github.com/lucalcin/jellyfin-coverflow/releases/tag/v0.4.9).
 Stop Jellyfin and extract its three files into a dedicated plugin-version
-directory such as `CoverFlow_0.4.8.0` under **your installation's plugin directory**:
+directory such as `CoverFlow_0.4.9.0` under **your installation's plugin directory**:
 
 ```text
-CoverFlow_0.4.8.0/
+CoverFlow_0.4.9.0/
   Jellyfin.Plugin.CoverFlow.dll
   meta.json
   coverflow.png
